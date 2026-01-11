@@ -1,0 +1,7 @@
+{
+  "domain": "easy_smart_monitor",
+  "name": "Easy Smart Monitor",
+  "version": "1.0.0",
+  "config_flow": true,
+  "iot_class": "cloud_polling"
+}
