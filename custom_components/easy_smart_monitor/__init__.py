@@ -4,95 +4,81 @@ import logging
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.const import Platform
+from homeassistant.helpers import aiohttp_client
 
-from .const import DOMAIN
-from .client import EasySmartMonitorClient
+from .const import DOMAIN, PLATFORMS
+from .client import EasySmartMonitorApiClient
 from .coordinator import EasySmartMonitorCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [
-    Platform.SENSOR,
-    Platform.BINARY_SENSOR,
-    Platform.SWITCH,
-    Platform.BUTTON,
-]
-
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """
-    Setup inicial da integração (YAML).
-    Não utilizado — configuração é somente via UI.
+    Setup inicial da integração.
+    Não utiliza YAML, apenas retorna True para compatibilidade.
     """
-    hass.data.setdefault(DOMAIN, {})
     return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """
-    Setup da integração a partir de um Config Entry.
+    Configura a integração a partir de uma ConfigEntry.
+    Cria client, coordinator e registra as plataformas.
     """
-    _LOGGER.info("Inicializando Easy Smart Monitor")
-
     hass.data.setdefault(DOMAIN, {})
 
-    # ======================================================
-    # CLIENT HTTP
-    # ======================================================
+    session = aiohttp_client.async_get_clientsession(hass)
 
-    client = EasySmartMonitorClient(
-        base_url=entry.data["api_url"],
+    api_client = EasySmartMonitorApiClient(
+        base_url=entry.data["api_host"],
         username=entry.data["username"],
         password=entry.data["password"],
+        session=session,
     )
-
-    # ======================================================
-    # COORDINATOR
-    # ======================================================
 
     coordinator = EasySmartMonitorCoordinator(
         hass=hass,
+        api_client=api_client,
         entry=entry,
-        client=client,
     )
 
-    # Inicialização explícita (fila + loop)
     await coordinator.async_initialize()
 
-    hass.data[DOMAIN][entry.entry_id] = coordinator
-
-    # ======================================================
-    # SETUP DAS PLATAFORMAS
-    # ======================================================
+    hass.data[DOMAIN][entry.entry_id] = {
+        "client": api_client,
+        "coordinator": coordinator,
+    }
 
     await hass.config_entries.async_forward_entry_setups(
         entry,
         PLATFORMS,
     )
 
+    _LOGGER.info("Easy Smart Monitor inicializado com sucesso")
+
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """
-    Descarrega a integração (reload / remoção).
+    Remove a integração e descarrega todas as plataformas.
+    Garante cancelamento de tasks e persistência correta.
     """
-    _LOGGER.info("Finalizando Easy Smart Monitor")
-
-    coordinator: EasySmartMonitorCoordinator = hass.data[DOMAIN].get(
-        entry.entry_id
-    )
-
-    if coordinator:
-        await coordinator.async_shutdown()
-
     unload_ok = await hass.config_entries.async_unload_platforms(
         entry,
         PLATFORMS,
     )
 
     if unload_ok:
-        hass.data[DOMAIN].pop(entry.entry_id, None)
+        data = hass.data[DOMAIN].pop(entry.entry_id)
+        coordinator: EasySmartMonitorCoordinator = data["coordinator"]
+
+        await coordinator.async_shutdown()
+
+        if not hass.data[DOMAIN]:
+            hass.data.pop(DOMAIN)
+
+        _LOGGER.info("Easy Smart Monitor descarregado com sucesso")
 
     return unload_ok

@@ -2,6 +2,20 @@
   "domain": "easy_smart_monitor",
   "name": "Easy Smart Monitor",
   "version": "1.0.0",
+  "documentation": "https://github.com/thiagodiedrich/easy-smart-monitor",
+  "issue_tracker": "https://github.com/thiagodiedrich/easy-smart-monitor/issues",
+  "requirements": [],
+  "dependencies": [],
+  "after_dependencies": [],
+  "codeowners": ["@thiagodiedrich"],
   "config_flow": true,
-  "iot_class": "cloud_polling"
+  "iot_class": "cloud_polling",
+  "integration_type": "service",
+  "loggers": ["custom_components.easy_smart_monitor"],
+  "platforms": [
+    "sensor",
+    "binary_sensor",
+    "siren",
+    "button"
+  ]
 }

@@ -2,304 +2,286 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import timedelta, datetime
-from typing import Dict, Any, List
+from datetime import datetime
+from typing import Any
 
-from aiohttp import ClientSession, ClientError
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.storage import Store
+from homeassistant.util.dt import utcnow
 
-from .client import EasySmartMonitorClient
+from .const import (
+    DOMAIN,
+    STORAGE_VERSION,
+    STORAGE_KEY_QUEUE,
+    DEFAULT_DOOR_OPEN_SECONDS,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
 
-class EasySmartMonitorCoordinator(DataUpdateCoordinator):
-    """
-    Coordinator responsável por:
-    - lógica da porta (120s)
-    - controle da sirene
-    - reset de sirene
-    - fila local persistente
-    - envio periódico de eventos para API
-    """
-
-    SEND_INTERVAL = 60  # segundos
-    QUEUE_STORAGE_KEY = "easy_smart_monitor_queue"
-    QUEUE_STORAGE_VERSION = 1
+class EasySmartMonitorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
+    """Coordinator central do Easy Smart Monitor."""
 
     def __init__(
         self,
         hass: HomeAssistant,
+        api_client,
         entry,
-        client: EasySmartMonitorClient,
     ) -> None:
+        self.hass = hass
+        self.entry = entry
+        self.api_client = api_client
+
+        # Persistência
+        self._store: Store[list[dict[str, Any]]] = Store(
+            hass, STORAGE_VERSION, STORAGE_KEY_QUEUE
+        )
+        self._queue: list[dict[str, Any]] = []
+
+        # Estados globais
+        self.integration_status: str = "offline"
+        self.last_successful_sync: datetime | None = None
+        self._paused: bool = False
+
+        # Estados por equipamento
+        self.equipment_status: dict[int, str] = {}
+        self.equipment_status_details: dict[int, dict] = {}
+
+        self.numeric_states: dict[int, dict[str, float]] = {}
+        self.binary_states: dict[int, dict[str, bool]] = {}
+        self.binary_attributes: dict[int, dict[str, dict]] = {}
+
+        self.siren_state: dict[int, bool] = {}
+        self.siren_attributes: dict[int, dict] = {}
+
+        # Timers
+        self._open_door_tasks: dict[int, asyncio.Task] = {}
+
         super().__init__(
             hass,
             _LOGGER,
-            name="Easy Smart Monitor",
-            update_interval=timedelta(seconds=30),
+            name=DOMAIN,
+            update_interval=None,
         )
 
-        self.hass: HomeAssistant = hass
-        self.entry = entry
-        self.client = client
-
-        # ===== Timers de porta por equipamento =====
-        self._door_tasks: Dict[int, asyncio.Task] = {}
-
-        # ===== Fila local =====
-        self._store = Store(
-            hass,
-            self.QUEUE_STORAGE_VERSION,
-            self.QUEUE_STORAGE_KEY,
-        )
-        self._queue: List[Dict[str, Any]] = []
-
-        # ===== Controle do loop de envio =====
-        self._send_task: asyncio.Task | None = None
-        self._queue_lock = asyncio.Lock()
-
-    # ======================================================
-    # CICLO DO COORDINATOR (OBRIGATÓRIO)
-    # ======================================================
-
-    async def _async_update_data(self) -> dict:
-        """
-        Método obrigatório do DataUpdateCoordinator.
-
-        Não buscamos dados externos aqui.
-        A lógica é baseada em eventos.
-        """
-        return {}
+    # ---------------------------------------------------------
+    # SETUP / SHUTDOWN
+    # ---------------------------------------------------------
 
     async def async_initialize(self) -> None:
-        """
-        Inicialização explícita do coordinator:
-        - carrega fila persistente
-        - inicia loop de envio
-        """
-        data = await self._store.async_load()
-        self._queue = data or []
+        """Inicializa o coordinator."""
+        self._queue = await self._store.async_load() or []
+
+        for equipment in self.entry.options.get("equipments", []):
+            eid = equipment["id"]
+
+            self.equipment_status[eid] = "ok"
+            self.equipment_status_details[eid] = {}
+            self.numeric_states[eid] = {}
+            self.binary_states[eid] = {}
+            self.binary_attributes[eid] = {}
+            self.siren_state[eid] = False
+            self.siren_attributes[eid] = {}
+
+        self._register_state_listeners()
+
+        self.integration_status = "online"
+        self.async_set_updated_data({})
 
         _LOGGER.info(
-            "Fila local carregada com %d eventos pendentes",
+            "Easy Smart Monitor inicializado (%s eventos na fila)",
             len(self._queue),
         )
 
-        if not self._send_task:
-            self._send_task = self.hass.async_create_task(
-                self._send_loop()
-            )
-
     async def async_shutdown(self) -> None:
-        """
-        Finalização limpa.
-        """
-        if self._send_task:
-            self._send_task.cancel()
-            self._send_task = None
-
-        for task in self._door_tasks.values():
-            if not task.done():
-                task.cancel()
-
-    # ======================================================
-    # LÓGICA DA PORTA (120s)
-    # ======================================================
-
-    @callback
-    def handle_door_state_change(self, equipment_id: int, is_open: bool) -> None:
-        """
-        Chamado pelo binary_sensor quando a porta muda de estado.
-        """
-        self.hass.async_create_task(
-            self._enqueue_event(
-                {
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "equipment_id": equipment_id,
-                    "event": "door",
-                    "open": is_open,
-                }
-            )
-        )
-
-        if is_open:
-            _LOGGER.debug(
-                "Porta aberta para equipamento %s, iniciando timer",
-                equipment_id,
-            )
-            self._start_door_timer(equipment_id)
-        else:
-            _LOGGER.debug(
-                "Porta fechada para equipamento %s, cancelando timer",
-                equipment_id,
-            )
-            self._cancel_door_timer(equipment_id)
-
-    def _start_door_timer(self, equipment_id: int) -> None:
-        self._cancel_door_timer(equipment_id)
-
-        self._door_tasks[equipment_id] = self.hass.async_create_task(
-            self._door_timer_task(equipment_id)
-        )
-
-    def _cancel_door_timer(self, equipment_id: int) -> None:
-        task = self._door_tasks.pop(equipment_id, None)
-        if task and not task.done():
+        """Finaliza coordinator."""
+        for task in self._open_door_tasks.values():
             task.cancel()
 
-    async def _door_timer_task(self, equipment_id: int) -> None:
-        try:
-            await asyncio.sleep(120)
+        await self._store.async_save(self._queue)
 
-            if not self._is_door_open(equipment_id):
-                _LOGGER.debug(
-                    "Timer finalizado mas porta está fechada (%s)",
-                    equipment_id,
+    # ---------------------------------------------------------
+    # LISTENERS
+    # ---------------------------------------------------------
+
+    def _register_state_listeners(self) -> None:
+        """Registra listeners para sensores configurados."""
+        for equipment in self.entry.options.get("equipments", []):
+            for sensor in equipment.get("sensors", []):
+                if not sensor.get("enabled", True):
+                    continue
+
+                async_track_state_change_event(
+                    self.hass,
+                    sensor["entity_id"],
+                    self._handle_state_change,
                 )
-                return
 
-            _LOGGER.warning(
-                "Porta aberta por 120s, acionando sirene (%s)",
-                equipment_id,
-            )
+    @callback
+    async def _handle_state_change(self, event) -> None:
+        new_state = event.data.get("new_state")
+        if not new_state:
+            return
 
-            await self._turn_on_siren(equipment_id)
+        entity_id = new_state.entity_id
+        timestamp = utcnow()
 
-            await self._enqueue_event(
-                {
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "equipment_id": equipment_id,
-                    "event": "siren",
-                    "state": "on",
+        for equipment in self.entry.options.get("equipments", []):
+            for sensor in equipment.get("sensors", []):
+                if sensor["entity_id"] != entity_id:
+                    continue
+
+                await self._process_sensor_update(
+                    equipment,
+                    sensor,
+                    new_state.state,
+                    new_state.attributes,
+                    timestamp,
+                )
+
+    # ---------------------------------------------------------
+    # PIPELINE CENTRAL
+    # ---------------------------------------------------------
+
+    async def _process_sensor_update(
+        self,
+        equipment: dict,
+        sensor: dict,
+        state: Any,
+        attributes: dict,
+        timestamp: datetime,
+    ) -> None:
+        equipment_id = equipment["id"]
+        sensor_type = sensor["type"]
+
+        # ---- Persistência na fila
+        self._queue.append(
+            {
+                "equipment_id": equipment_id,
+                "equipment_name": equipment["name"],
+                "equipment_uuid": equipment["uuid"],
+                "sensor_id": sensor["id"],
+                "sensor_uuid": sensor["uuid"],
+                "sensor_type": sensor_type,
+                "sensor_status": state,
+                "timestamp": timestamp.isoformat(),
+            }
+        )
+        await self._store.async_save(self._queue)
+
+        # ---- Atualização de estados
+        if sensor_type == "temperature":
+            self.numeric_states[equipment_id]["temperature"] = float(state)
+
+        elif sensor_type == "humidity":
+            self.numeric_states[equipment_id]["humidity"] = float(state)
+
+        elif sensor_type == "energy":
+            self.binary_states[equipment_id]["energy_on"] = state == "on"
+            self.binary_attributes[equipment_id]["energy"] = {
+                "power_w": attributes.get("power"),
+                "voltage_v": attributes.get("voltage"),
+                "current_a": attributes.get("current"),
+                "energy_kwh": attributes.get("energy"),
+            }
+
+        elif sensor_type == "door":
+            is_open = state == "on"
+            self.binary_states[equipment_id]["door_open"] = is_open
+
+            if is_open:
+                self.binary_attributes[equipment_id]["door"] = {
+                    "open_since": timestamp.isoformat()
                 }
-            )
+                await self._start_door_timer(equipment)
+            else:
+                await self._cancel_door_timer(equipment_id)
 
+        self.async_set_updated_data({})
+
+    # ---------------------------------------------------------
+    # DOOR / SIREN LOGIC
+    # ---------------------------------------------------------
+
+    async def _start_door_timer(self, equipment: dict) -> None:
+        equipment_id = equipment["id"]
+
+        if equipment_id in self._open_door_tasks:
+            return
+
+        self._open_door_tasks[equipment_id] = asyncio.create_task(
+            self._door_timer_task(equipment)
+        )
+
+    async def _door_timer_task(self, equipment: dict) -> None:
+        equipment_id = equipment["id"]
+
+        try:
+            await asyncio.sleep(DEFAULT_DOOR_OPEN_SECONDS)
+            await self.async_trigger_siren(equipment_id)
         except asyncio.CancelledError:
-            _LOGGER.debug(
-                "Timer cancelado para equipamento %s",
-                equipment_id,
-            )
+            pass
 
-    # ======================================================
-    # CONTROLE DA SIRENE
-    # ======================================================
+    async def _cancel_door_timer(self, equipment_id: int) -> None:
+        task = self._open_door_tasks.pop(equipment_id, None)
+        if task:
+            task.cancel()
 
-    async def _turn_on_siren(self, equipment_id: int) -> None:
-        entity_id = self._get_siren_entity_id(equipment_id)
-        if entity_id:
-            await self.hass.services.async_call(
-                "switch",
-                "turn_on",
-                {"entity_id": entity_id},
-                blocking=False,
-            )
+    # ---------------------------------------------------------
+    # SIREN / BUTTON
+    # ---------------------------------------------------------
 
-    async def _turn_off_siren(self, equipment_id: int) -> None:
-        entity_id = self._get_siren_entity_id(equipment_id)
-        if entity_id:
-            await self.hass.services.async_call(
-                "switch",
-                "turn_off",
-                {"entity_id": entity_id},
-                blocking=False,
-            )
+    async def async_trigger_siren(self, equipment_id: int) -> None:
+        self.siren_state[equipment_id] = True
+        self.siren_attributes[equipment_id] = {
+            "trigger_reason": "door_open",
+            "triggered_at": utcnow().isoformat(),
+        }
+        self.equipment_status[equipment_id] = "porta_aberta"
+        self.async_set_updated_data({})
 
-    def reset_siren(self, equipment_id: int) -> None:
-        """
-        Chamado pelo botão RESET.
-        """
-        _LOGGER.info(
-            "Reset de sirene para equipamento %s",
-            equipment_id,
-        )
+    async def async_silence_siren(self, equipment_id: int) -> None:
+        await self._cancel_door_timer(equipment_id)
+        self.siren_state[equipment_id] = False
+        self.siren_attributes[equipment_id] = {}
+        self.equipment_status[equipment_id] = "ok"
+        self.async_set_updated_data({})
 
-        self._cancel_door_timer(equipment_id)
-        self.hass.async_create_task(self._turn_off_siren(equipment_id))
+    # ---------------------------------------------------------
+    # API SENDER
+    # ---------------------------------------------------------
 
-        self.hass.async_create_task(
-            self._enqueue_event(
-                {
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "equipment_id": equipment_id,
-                    "event": "reset",
-                }
-            )
-        )
+    async def async_send_queue(self) -> None:
+        if self._paused or not self._queue:
+            return
 
-        # Se a porta ainda estiver aberta, reinicia o timer
-        if self._is_door_open(equipment_id):
-            self._start_door_timer(equipment_id)
-
-    # ======================================================
-    # FILA LOCAL
-    # ======================================================
-
-    async def _enqueue_event(self, payload: Dict[str, Any]) -> None:
-        async with self._queue_lock:
-            self._queue.append(payload)
+        try:
+            await self.api_client.send_events(self._queue)
+            self._queue.clear()
             await self._store.async_save(self._queue)
 
-    async def _send_loop(self) -> None:
-        """
-        Loop assíncrono que envia a fila para a API periodicamente.
-        """
-        async with ClientSession() as session:
-            while True:
-                try:
-                    await asyncio.sleep(self.SEND_INTERVAL)
+            self.last_successful_sync = utcnow()
+            self.integration_status = "online"
+        except Exception as err:  # noqa: BLE001
+            self.integration_status = "api_error"
+            _LOGGER.error("Erro ao enviar dados para API: %s", err)
 
-                    if not self._queue:
-                        continue
+        self.async_set_updated_data({})
 
-                    async with self._queue_lock:
-                        batch = list(self._queue)
+    # ---------------------------------------------------------
+    # HELPERS
+    # ---------------------------------------------------------
 
-                    await self.client.async_send_events(session, batch)
+    @property
+    def queue_size(self) -> int:
+        return len(self._queue)
 
-                    async with self._queue_lock:
-                        self._queue.clear()
-                        await self._store.async_save(self._queue)
+    def pause(self) -> None:
+        self._paused = True
+        self.integration_status = "paused"
 
-                    _LOGGER.info(
-                        "Fila enviada com sucesso (%d eventos)",
-                        len(batch),
-                    )
-
-                except ClientError as err:
-                    _LOGGER.warning(
-                        "Falha ao enviar fila, mantendo eventos: %s",
-                        err,
-                    )
-                except asyncio.CancelledError:
-                    _LOGGER.debug("Loop de envio cancelado")
-                    return
-                except Exception as err:
-                    _LOGGER.exception(
-                        "Erro inesperado no envio da fila: %s",
-                        err,
-                    )
-
-    # ======================================================
-    # UTILITÁRIOS
-    # ======================================================
-
-    def _is_door_open(self, equipment_id: int) -> bool:
-        equipments: Dict[str, Any] = self.entry.options.get("equipments", {})
-        for eq in equipments.values():
-            if eq.get("id") == equipment_id:
-                for sensor in eq.get("sensors", {}).values():
-                    if sensor.get("type") == "door":
-                        state = self.hass.states.get(sensor["entity_id"])
-                        return bool(state and state.state == "on")
-        return False
-
-    def _get_siren_entity_id(self, equipment_id: int) -> str | None:
-        equipments: Dict[str, Any] = self.entry.options.get("equipments", {})
-        for eq in equipments.values():
-            if eq.get("id") == equipment_id:
-                slug = eq["name"].lower().replace(" ", "_")
-                return f"switch.{slug}_sirene"
-        return None
+    def resume(self) -> None:
+        self._paused = False
+        self.integration_status = "online"

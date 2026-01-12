@@ -2,25 +2,30 @@
 
 ## [1.0.0] - 2026-01-11
 
-### ✨ Added
-- Integração Easy Smart Monitor
-- Configuração 100% via UI (Config Flow)
-- Gerenciamento de equipamentos e sensores
-- Entidades dinâmicas por equipamento
-- Lógica de sirene (porta aberta por 120s)
-- Botão de reset da sirene
+### 🎉 Primeira versão estável
+
+#### ✨ Adicionado
+- Integração customizada Easy Smart Monitor
+- Config Flow completo via UI
+- Gestão de múltiplos equipamentos
+- Vinculação dinâmica de sensores
+- Monitoramento de porta, temperatura, umidade e energia
+- Sirene automática após porta aberta
+- Botão para silenciar alarme
+- Envio de eventos para API REST
 - Fila local persistente
-- Envio assíncrono para API REST
-- Autenticação com token e refresh automático
+- TEST_MODE para desenvolvimento offline
 - Testes unitários com pytest
+- Estrutura pronta para CI/CD
 
-### 🧱 Architecture
-- DataUpdateCoordinator como núcleo
-- Client HTTP desacoplado
-- Persistência via Store
-- Código totalmente assíncrono
+#### 🧪 Testes
+- test_client.py
+- test_config_flow.py
+- test_coordinator.py
+- test_entities.py
 
-### 🛡️ Stability
-- Sem chamadas bloqueantes
-- Retry automático em falha de API
-- Compatível com reload da integração
+#### 🧱 Arquitetura
+- DataUpdateCoordinator central
+- Client HTTP assíncrono
+- Entidades desacopladas da lógica
+- Persistência com Store

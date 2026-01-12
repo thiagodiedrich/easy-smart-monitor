@@ -1,177 +1,443 @@
 from __future__ import annotations
-import voluptuous as vol
-from homeassistant import config_entries
-from .const import DOMAIN, TEST_MODE
-from .client import EasySmartMonitorClient
 
+import logging
 import uuid
-from homeassistant.helpers.selector import EntitySelector
+from typing import Any
+
+import voluptuous as vol
+
+from homeassistant import config_entries
+from homeassistant.core import callback
+from homeassistant.helpers import aiohttp_client, selector
+from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry
+
+from .const import (
+    DOMAIN,
+    CONF_API_HOST,
+    CONF_USERNAME,
+    CONF_PASSWORD,
+    TEST_MODE,
+)
+from .client import EasySmartMonitorApiClient
+
+_LOGGER = logging.getLogger(__name__)
+
+
+# ============================================================
+# CONFIG FLOW (CRIAÇÃO DA INTEGRAÇÃO)
+# ============================================================
 
 class EasySmartMonitorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+    """Config Flow do Easy Smart Monitor."""
+
     VERSION = 1
 
-    @staticmethod
-    def async_get_options_flow(config_entry):
-        return EasySmartMonitorOptionsFlow()
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ):
+        """Tela inicial – login."""
+        errors: dict[str, str] = {}
 
-    async def async_step_user(self, user_input=None):
-        errors = {}
-        if TEST_MODE:
-            return self.async_create_entry(
-                title="Easy Smart Monitor (TEST MODE)",
-                data={
-                    "api_url": "http://localhost",
-                    "username": "test",
-                    "password": "test",
-                },
-            )
-        if user_input:
-            client = EasySmartMonitorClient(
-                self.hass,
-                user_input["api_url"],
-                user_input["username"],
-                user_input["password"],
-            )
+        if user_input is not None:
+            api_host = user_input[CONF_API_HOST]
+            username = user_input[CONF_USERNAME]
+            password = user_input[CONF_PASSWORD]
+
+            # ------------------------------
+            # TEST MODE (SEM API)
+            # ------------------------------
+            if TEST_MODE:
+                _LOGGER.warning(
+                    "Easy Smart Monitor iniciado em TEST_MODE "
+                    "(API não será validada)"
+                )
+                return self.async_create_entry(
+                    title="Easy Smart Monitor (TEST MODE)",
+                    data={
+                        CONF_API_HOST: api_host,
+                        CONF_USERNAME: username,
+                        CONF_PASSWORD: password,
+                    },
+                    options={
+                        "equipments": [],
+                        "send_interval": 60,
+                        "paused": False,
+                    },
+                )
+
+            # ------------------------------
+            # PRODUÇÃO (VALIDA API)
+            # ------------------------------
             try:
+                session = aiohttp_client.async_get_clientsession(self.hass)
+                client = EasySmartMonitorApiClient(
+                    base_url=api_host,
+                    username=username,
+                    password=password,
+                    session=session,
+                )
                 await client.async_login()
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.error("Erro ao autenticar na API: %s", err)
+                errors["base"] = "cannot_connect"
+            else:
                 return self.async_create_entry(
                     title="Easy Smart Monitor",
-                    data=user_input,
+                    data={
+                        CONF_API_HOST: api_host,
+                        CONF_USERNAME: username,
+                        CONF_PASSWORD: password,
+                    },
+                    options={
+                        "equipments": [],
+                        "send_interval": 60,
+                        "paused": False,
+                    },
                 )
-            except Exception:
-                errors["base"] = "auth_failed"
 
-        schema = vol.Schema({
-            vol.Required("api_url"): str,
-            vol.Required("username"): str,
-            vol.Required("password"): str,
-        })
-        return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
-
-class EasySmartMonitorOptionsFlow(config_entries.OptionsFlow):
-
-    def __init__(self):
-        self._options = {}
-        self._equipment_id = None
-
-    async def async_step_init(self, user_input=None):
-        if not self._options:
-            self._options = dict(self.config_entry.options)
-
-        equipments = self._options.get("equipments", {})
-
-        if user_input:
-            action = user_input["action"]
-
-            if action == "add":
-                return await self.async_step_add_equipment()
-
-            if action == "save":
-                return self.async_create_entry(title="", data=self._options)
-
-            self._equipment_id = action
-            return await self.async_step_equipment_menu()
-
-        actions = {
-            "add": "➕ Adicionar equipamento",
-            "save": "💾 Salvar e sair",
-        }
-
-        for eq_id, eq in equipments.items():
-            actions[eq_id] = f"{eq['name']} ({eq['location']})"
-
-        return self.async_show_form(
-            step_id="init",
-            data_schema=vol.Schema({
-                vol.Required("action"): vol.In(actions)
-            }),
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_API_HOST): str,
+                vol.Required(CONF_USERNAME): str,
+                vol.Required(CONF_PASSWORD): str,
+            }
         )
 
+        return self.async_show_form(
+            step_id="user",
+            data_schema=schema,
+            errors=errors,
+        )
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(
+        config_entry: config_entries.ConfigEntry,
+    ) -> config_entries.OptionsFlow:
+        return EasySmartMonitorOptionsFlow(config_entry)
+
+
+# ============================================================
+# OPTIONS FLOW (GESTÃO CONTÍNUA)
+# ============================================================
+
+class EasySmartMonitorOptionsFlow(config_entries.OptionsFlow):
+    """Options Flow do Easy Smart Monitor."""
+
+    def __init__(self, entry: config_entries.ConfigEntry) -> None:
+        self.entry = entry
+        self.options = dict(entry.options)
+        self._selected_equipment_id: int | None = None
+
+    # --------------------------------------------------------
+    # MENU PRINCIPAL
+    # --------------------------------------------------------
+
+    async def async_step_init(self, user_input=None):
+        return self.async_show_menu(
+            step_id="init",
+            menu_options=[
+                "integration_settings",
+                "select_equipment",
+            ],
+        )
+
+    # --------------------------------------------------------
+    # CONFIGURAÇÕES DA INTEGRAÇÃO
+    # --------------------------------------------------------
+
+    async def async_step_integration_settings(self, user_input=None):
+        if user_input is not None:
+            self.options["send_interval"] = user_input["send_interval"]
+            self.options["paused"] = user_input["paused"]
+            return self.async_create_entry(title="", data=self.options)
+
+        return self.async_show_form(
+            step_id="integration_settings",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        "send_interval",
+                        default=self.options.get("send_interval", 60),
+                    ): vol.All(int, vol.Range(min=10)),
+                    vol.Required(
+                        "paused",
+                        default=self.options.get("paused", False),
+                    ): bool,
+                }
+            ),
+        )
+
+    # --------------------------------------------------------
+    # SELEÇÃO DE EQUIPAMENTO
+    # --------------------------------------------------------
+
+    async def async_step_select_equipment(self, user_input=None):
+        equipments = self.options.get("equipments", [])
+
+        if user_input is not None:
+            self._selected_equipment_id = user_input["equipment_id"]
+            return await self.async_step_equipment_menu()
+
+        equipment_map = {
+            f"{e['name']} ({e['location']})": e["id"]
+            for e in equipments
+        }
+
+        return self.async_show_form(
+            step_id="select_equipment",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("equipment_id"): vol.In(equipment_map),
+                }
+            ),
+        )
+
+    # --------------------------------------------------------
+    # MENU DO EQUIPAMENTO
+    # --------------------------------------------------------
+
+    async def async_step_equipment_menu(self, user_input=None):
+        return self.async_show_menu(
+            step_id="equipment_menu",
+            menu_options=[
+                "add_equipment",
+                "edit_equipment",
+                "manage_sensors",
+            ],
+        )
+
+    # --------------------------------------------------------
+    # ADICIONAR EQUIPAMENTO
+    # --------------------------------------------------------
+
     async def async_step_add_equipment(self, user_input=None):
-        if user_input:
-            equipments = self._options.setdefault("equipments", {})
-            next_id = str(len(equipments) + 1)
+        if user_input is not None:
+            equipments = self.options.setdefault("equipments", [])
+            equipment_id = len(equipments) + 1
 
-            equipments[next_id] = {
-                "id": int(next_id),
-                "uuid": str(uuid.uuid4()),
-                "name": user_input["name"],
-                "location": user_input["location"],
-                "sensors": {},
-            }
+            equipments.append(
+                {
+                    "id": equipment_id,
+                    "uuid": uuid.uuid4().hex,
+                    "name": user_input["name"],
+                    "location": user_input["location"],
+                    "collect_interval": user_input["collect_interval"],
+                    "enabled": True,
+                    "sensors": [],
+                }
+            )
 
-            return await self.async_step_init()
+            return self.async_create_entry(title="", data=self.options)
 
         return self.async_show_form(
             step_id="add_equipment",
-            data_schema=vol.Schema({
-                vol.Required("name"): str,
-                vol.Required("location"): str,
-            }),
+            data_schema=vol.Schema(
+                {
+                    vol.Required("name"): str,
+                    vol.Required("location"): str,
+                    vol.Required("collect_interval", default=30): vol.All(
+                        int, vol.Range(min=10)
+                    ),
+                }
+            ),
         )
 
-    async def async_step_equipment_menu(self, user_input=None):
-        eq = self._options["equipments"][self._equipment_id]
-        sensors = eq.get("sensors", {})
+    # --------------------------------------------------------
+    # EDITAR EQUIPAMENTO
+    # --------------------------------------------------------
 
-        if user_input:
-            action = user_input["action"]
+    async def async_step_edit_equipment(self, user_input=None):
+        equipment = next(
+            e for e in self.options["equipments"]
+            if e["id"] == self._selected_equipment_id
+        )
 
-            if action == "add_sensor":
-                return await self.async_step_add_sensor()
-
-            if action == "remove_equipment":
-                del self._options["equipments"][self._equipment_id]
-                return await self.async_step_init()
-
-            if action == "back":
-                return await self.async_step_init()
-
-            if action.startswith("sensor_"):
-                sensor_id = action.replace("sensor_", "")
-                del sensors[sensor_id]
-                return await self.async_step_equipment_menu()
-
-        actions = {
-            "add_sensor": "➕ Adicionar sensor",
-            "remove_equipment": "❌ Remover equipamento",
-            "back": "↩️ Voltar",
-        }
-
-        for sensor_id, sensor in sensors.items():
-            actions[f"sensor_{sensor_id}"] = (
-                f"🧩 {sensor['type']} → {sensor['entity_id']}"
+        if user_input is not None:
+            equipment.update(
+                {
+                    "name": user_input["name"],
+                    "location": user_input["location"],
+                    "collect_interval": user_input["collect_interval"],
+                    "enabled": user_input["enabled"],
+                }
             )
+            return self.async_create_entry(title="", data=self.options)
 
         return self.async_show_form(
-            step_id="equipment_menu",
-            data_schema=vol.Schema({
-                vol.Required("action"): vol.In(actions)
-            }),
+            step_id="edit_equipment",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("name", default=equipment["name"]): str,
+                    vol.Required("location", default=equipment["location"]): str,
+                    vol.Required(
+                        "collect_interval",
+                        default=equipment["collect_interval"],
+                    ): vol.All(int, vol.Range(min=10)),
+                    vol.Required(
+                        "enabled",
+                        default=equipment["enabled"],
+                    ): bool,
+                }
+            ),
         )
 
+    # --------------------------------------------------------
+    # MENU DE SENSORES
+    # --------------------------------------------------------
+
+    async def async_step_manage_sensors(self, user_input=None):
+        return self.async_show_menu(
+            step_id="manage_sensors",
+            menu_options=[
+                "add_sensor",
+                "edit_sensor",
+                "remove_sensor",
+            ],
+        )
+
+    # --------------------------------------------------------
+    # ADICIONAR SENSOR
+    # --------------------------------------------------------
+
     async def async_step_add_sensor(self, user_input=None):
-        sensors = self._options["equipments"][self._equipment_id]["sensors"]
+        equipment = next(
+            e for e in self.options["equipments"]
+            if e["id"] == self._selected_equipment_id
+        )
 
-        if user_input:
-            next_id = str(len(sensors) + 1)
-            sensors[next_id] = {
-                "id": int(next_id),
-                "uuid": str(uuid.uuid4()),
-                "entity_id": user_input["entity_id"],
-                "type": user_input["type"],
-                "enabled": user_input["enabled"],
-            }
+        if user_input is not None:
+            sensors = equipment.setdefault("sensors", [])
+            sensor_id = len(sensors) + 1
 
-            return await self.async_step_equipment_menu()
+            sensors.append(
+                {
+                    "id": sensor_id,
+                    "uuid": uuid.uuid4().hex,
+                    "entity_id": user_input["entity_id"],
+                    "type": user_input["sensor_type"],
+                    "enabled": True,
+                }
+            )
+
+            return self.async_create_entry(title="", data=self.options)
+
+        entity_reg = async_get_entity_registry(self.hass)
+        entities = [
+            e.entity_id
+            for e in entity_reg.entities.values()
+            if not e.disabled
+        ]
 
         return self.async_show_form(
             step_id="add_sensor",
-            data_schema=vol.Schema({
-                vol.Required("entity_id"): EntitySelector(),
-                vol.Required("type"): vol.In(
-                    ["temperature", "energy", "door", "siren", "button"]
-                ),
-                vol.Optional("enabled", default=True): bool,
-            }),
+            data_schema=vol.Schema(
+                {
+                    vol.Required("entity_id"): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=entities,
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
+                    ),
+                    vol.Required("sensor_type"): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=[
+                                "temperature",
+                                "humidity",
+                                "energy",
+                                "door",
+                            ],
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
+                    ),
+                }
+            ),
         )
+
+    # --------------------------------------------------------
+    # EDITAR SENSOR
+    # --------------------------------------------------------
+
+    async def async_step_edit_sensor(self, user_input=None):
+        equipment = next(
+            e for e in self.options["equipments"]
+            if e["id"] == self._selected_equipment_id
+        )
+
+        if user_input is None:
+            sensor_map = {
+                f"{s['id']} - {s['entity_id']}": s["id"]
+                for s in equipment.get("sensors", [])
+            }
+
+            return self.async_show_form(
+                step_id="edit_sensor",
+                data_schema=vol.Schema(
+                    {
+                        vol.Required("sensor_id"): vol.In(sensor_map),
+                    }
+                ),
+            )
+
+        sensor = next(
+            s for s in equipment["sensors"]
+            if s["id"] == user_input["sensor_id"]
+        )
+
+        return await self.async_step_edit_sensor_detail(sensor)
+
+    async def async_step_edit_sensor_detail(self, sensor, user_input=None):
+        if user_input is not None:
+            sensor["type"] = user_input["sensor_type"]
+            sensor["enabled"] = user_input["enabled"]
+            return self.async_create_entry(title="", data=self.options)
+
+        return self.async_show_form(
+            step_id="edit_sensor_detail",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        "sensor_type",
+                        default=sensor["type"],
+                    ): vol.In(
+                        ["temperature", "humidity", "energy", "door"]
+                    ),
+                    vol.Required(
+                        "enabled",
+                        default=sensor["enabled"],
+                    ): bool,
+                }
+            ),
+        )
+
+    # --------------------------------------------------------
+    # REMOVER SENSOR
+    # --------------------------------------------------------
+
+    async def async_step_remove_sensor(self, user_input=None):
+        equipment = next(
+            e for e in self.options["equipments"]
+            if e["id"] == self._selected_equipment_id
+        )
+
+        if user_input is None:
+            sensor_map = {
+                f"{s['id']} - {s['entity_id']}": s["id"]
+                for s in equipment.get("sensors", [])
+            }
+
+            return self.async_show_form(
+                step_id="remove_sensor",
+                data_schema=vol.Schema(
+                    {
+                        vol.Required("sensor_id"): vol.In(sensor_map),
+                    }
+                ),
+            )
+
+        equipment["sensors"] = [
+            s for s in equipment["sensors"]
+            if s["id"] != user_input["sensor_id"]
+        ]
+
+        return self.async_create_entry(title="", data=self.options)

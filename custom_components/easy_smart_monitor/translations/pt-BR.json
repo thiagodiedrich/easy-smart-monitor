@@ -1,1 +1,73 @@
-{"title": "Easy Smart Monitor"}
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Easy Smart Monitor",
+        "description": "Conecte o Easy Smart Monitor à API.",
+        "data": {
+          "api_host": "Endereço da API",
+          "username": "Usuário",
+          "password": "Senha"
+        }
+      },
+      "integration_settings": {
+        "title": "Configurações da Integração",
+        "description": "Ajuste os parâmetros gerais da integração.",
+        "data": {
+          "send_interval": "Intervalo de envio para a API (segundos)",
+          "paused": "Pausar integração"
+        }
+      },
+      "select_equipment": {
+        "title": "Selecionar Equipamento",
+        "description": "Escolha um equipamento para gerenciar."
+      },
+      "add_equipment": {
+        "title": "Adicionar Equipamento",
+        "description": "Cadastre um novo equipamento.",
+        "data": {
+          "name": "Nome do equipamento",
+          "location": "Local de instalação",
+          "collect_interval": "Intervalo de coleta local (segundos)"
+        }
+      },
+      "edit_equipment": {
+        "title": "Editar Equipamento",
+        "description": "Atualize as informações do equipamento.",
+        "data": {
+          "name": "Nome do equipamento",
+          "location": "Local de instalação",
+          "collect_interval": "Intervalo de coleta local (segundos)",
+          "enabled": "Equipamento ativo"
+        }
+      },
+      "add_sensor": {
+        "title": "Adicionar Sensor",
+        "description": "Vincule um sensor existente do Home Assistant.",
+        "data": {
+          "entity_id": "Entidade do Home Assistant",
+          "sensor_type": "Tipo do sensor"
+        }
+      },
+      "edit_sensor": {
+        "title": "Editar Sensor",
+        "description": "Selecione um sensor para editar."
+      },
+      "edit_sensor_detail": {
+        "title": "Editar Sensor",
+        "description": "Altere as configurações do sensor.",
+        "data": {
+          "sensor_type": "Tipo do sensor",
+          "enabled": "Sensor ativo"
+        }
+      },
+      "remove_sensor": {
+        "title": "Remover Sensor",
+        "description": "Selecione um sensor para remover."
+      }
+    },
+    "error": {
+      "cannot_connect": "Não foi possível conectar à API. Verifique o endereço e as credenciais."
+    }
+  }
+}

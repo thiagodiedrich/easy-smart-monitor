@@ -1,146 +1,125 @@
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 from homeassistant.components.binary_sensor import (
     BinarySensorEntity,
     BinarySensorDeviceClass,
 )
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.entity import DeviceInfo
 
 from .const import DOMAIN
-from .coordinator import EasySmartMonitorCoordinator
-
-_LOGGER = logging.getLogger(__name__)
-
-
-# ============================================================
-# SETUP DA PLATAFORMA (OBRIGATÓRIO)
-# ============================================================
-
-async def async_setup_entry(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    async_add_entities,
-) -> None:
-    """
-    Cria dinamicamente binary_sensors (porta)
-    a partir dos equipamentos configurados no Options Flow.
-    """
-    coordinator: EasySmartMonitorCoordinator = hass.data[DOMAIN][entry.entry_id]
-
-    equipments: dict[str, Any] = entry.options.get("equipments", {})
-    entities: list[BinarySensorEntity] = []
-
-    for equipment in equipments.values():
-        for sensor in equipment.get("sensors", {}).values():
-            if not sensor.get("enabled", True):
-                continue
-
-            if sensor.get("type") == "door":
-                entities.append(
-                    EasySmartDoorBinarySensor(
-                        coordinator=coordinator,
-                        equipment=equipment,
-                        sensor=sensor,
-                    )
-                )
-
-    if entities:
-        async_add_entities(entities)
 
 
 # ============================================================
 # BASE BINARY SENSOR
 # ============================================================
 
-class EasySmartBaseBinarySensor(CoordinatorEntity, BinarySensorEntity):
+class EasySmartMonitorBaseBinarySensor(CoordinatorEntity, BinarySensorEntity):
+    """Classe base para binary_sensors do Easy Smart Monitor."""
+
+    _attr_has_entity_name = True
 
     def __init__(
         self,
-        coordinator: EasySmartMonitorCoordinator,
-        equipment: dict,
-        sensor: dict,
+        coordinator,
+        *,
+        name: str,
+        unique_id: str,
+        device_info: DeviceInfo,
+        equipment_id: int,
+        state_key: str,
+        attributes_key: str | None = None,
+        device_class: BinarySensorDeviceClass | None = None,
+        icon: str | None = None,
     ) -> None:
         super().__init__(coordinator)
-        self._equipment = equipment
-        self._sensor = sensor
-        self._source_entity_id: str = sensor["entity_id"]
-        self._unsub_listener = None
 
-    async def async_added_to_hass(self) -> None:
-        await super().async_added_to_hass()
+        self._equipment_id = equipment_id
+        self._state_key = state_key
+        self._attributes_key = attributes_key
 
-        self._unsub_listener = async_track_state_change_event(
-            self.hass,
-            [self._source_entity_id],
-            self._state_listener,
-        )
+        self._attr_name = name
+        self._attr_unique_id = unique_id
+        self._attr_device_info = device_info
 
-        state = self.hass.states.get(self._source_entity_id)
-        if state:
-            self.coordinator.handle_door_state_change(
-                self._equipment["id"],
-                state.state == "on",
-            )
-
-    async def async_will_remove_from_hass(self) -> None:
-        if self._unsub_listener:
-            self._unsub_listener()
-            self._unsub_listener = None
-        await super().async_will_remove_from_hass()
-
-    @callback
-    def _state_listener(self, event) -> None:
-        new_state = event.data.get("new_state")
-        if not new_state:
-            return
-
-        is_open = new_state.state == "on"
-
-        self.coordinator.handle_door_state_change(
-            self._equipment["id"],
-            is_open,
-        )
-
-    def _get_source_state(self):
-        return self.hass.states.get(self._source_entity_id)
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        return {
-            "equipment_id": self._equipment["id"],
-            "equipment_name": self._equipment["name"],
-            "equipment_location": self._equipment["location"],
-            "sensor_id": self._sensor["id"],
-            "sensor_type": self._sensor["type"],
-            "source_entity_id": self._source_entity_id,
-        }
-
-
-# ============================================================
-# DOOR SENSOR
-# ============================================================
-
-class EasySmartDoorBinarySensor(EasySmartBaseBinarySensor):
-
-    _attr_device_class = BinarySensorDeviceClass.DOOR
-
-    def __init__(
-        self,
-        coordinator: EasySmartMonitorCoordinator,
-        equipment: dict,
-        sensor: dict,
-    ) -> None:
-        super().__init__(coordinator, equipment, sensor)
-        self._attr_name = f"{equipment['name']} Porta"
-        self._attr_unique_id = sensor["uuid"]
+        if device_class:
+            self._attr_device_class = device_class
+        if icon:
+            self._attr_icon = icon
 
     @property
     def is_on(self) -> bool:
-        state = self._get_source_state()
-        return bool(state and state.state == "on")
+        """Retorna o estado binário a partir do coordinator."""
+        return bool(
+            self.coordinator.binary_states
+            .get(self._equipment_id, {})
+            .get(self._state_key, False)
+        )
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Atributos extras do binary sensor."""
+        if not self._attributes_key:
+            return {}
+
+        return (
+            self.coordinator.binary_attributes
+            .get(self._equipment_id, {})
+            .get(self._attributes_key, {})
+        )
+
+
+# ============================================================
+# BINARY SENSOR — ENERGIA (LIGADO / DESLIGADO)
+# ============================================================
+
+class EasySmartMonitorEnergyBinarySensor(EasySmartMonitorBaseBinarySensor):
+    """Binary sensor que indica se o equipamento está energizado."""
+
+    def __init__(
+        self,
+        coordinator,
+        *,
+        equipment: dict[str, Any],
+        device_info: DeviceInfo,
+    ) -> None:
+        super().__init__(
+            coordinator,
+            name="Energia",
+            unique_id=f"{equipment['uuid']}_energy",
+            device_info=device_info,
+            equipment_id=equipment["id"],
+            state_key="energy_on",
+            attributes_key="energy",
+            device_class=BinarySensorDeviceClass.POWER,
+            icon="mdi:power",
+        )
+
+
+# ============================================================
+# BINARY SENSOR — PORTA (ABERTA / FECHADA)
+# ============================================================
+
+class EasySmartMonitorDoorBinarySensor(EasySmartMonitorBaseBinarySensor):
+    """Binary sensor que indica se a porta está aberta."""
+
+    def __init__(
+        self,
+        coordinator,
+        *,
+        equipment: dict[str, Any],
+        device_info: DeviceInfo,
+    ) -> None:
+        super().__init__(
+            coordinator,
+            name="Porta",
+            unique_id=f"{equipment['uuid']}_door",
+            device_info=device_info,
+            equipment_id=equipment["id"],
+            state_key="door_open",
+            attributes_key="door",
+            device_class=BinarySensorDeviceClass.DOOR,
+            icon="mdi:door",
+        )

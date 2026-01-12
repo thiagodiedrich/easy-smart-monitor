@@ -1,173 +1,157 @@
 # Easy Smart Monitor
 
-Custom Component para Home Assistant destinado ao monitoramento inteligente de
-câmaras frias, freezers e geladeiras industriais ou comerciais.
+Easy Smart Monitor é uma **integração customizada para Home Assistant** focada em
+**monitoramento inteligente de equipamentos**, com ênfase em:
 
-A integração permite agrupar sensores físicos existentes em **EQUIPAMENTOS**,
-aplicar lógica de negócio (porta aberta → sirene), persistir eventos localmente
-e enviá-los de forma confiável para uma API REST externa.
-
----
-
-## ✨ Recursos Principais
-
-- Configuração **100% via UI (Config Flow)**
-- Suporte a **múltiplos equipamentos**
-- Criação **dinâmica de entidades**
-- Lógica industrial de alarme:
-  - Porta aberta por 120s → sirene
-  - Reset reinicia o ciclo se a porta continuar aberta
-- Fila local persistente (sem perda de dados)
-- Envio assíncrono em lote para API REST
-- Autenticação com token + refresh automático
-- Totalmente assíncrono (não bloqueia o HA)
-- Testes unitários com pytest
+- Porta aberta com alarme automático
+- Monitoramento de temperatura, umidade e energia
+- Envio de eventos para API externa
+- Operação resiliente com fila local
+- Configuração 100% via interface gráfica
+- Modo de teste sem API externa (TEST_MODE)
 
 ---
 
-## 🧱 Arquitetura
+## 🚀 Recursos Principais
 
-Sensores existentes (HA)
-↓
-Entidades do Easy Smart Monitor
-↓
-Coordinator (lógica e timers)
-↓
-Fila local persistente
-↓
-Client HTTP assíncrono
-↓
-API REST
-
-yaml
-Copiar código
+- ✅ Configuração via UI (Config Flow)
+- ✅ Suporte a múltiplos equipamentos
+- ✅ Sensores dinâmicos por equipamento
+- ✅ Sirene automática após porta aberta por tempo configurável
+- ✅ Botão para silenciar alarme
+- ✅ Persistência local de eventos
+- ✅ Envio assíncrono para API REST
+- ✅ TEST_MODE para desenvolvimento offline
+- ✅ Testes unitários com pytest
+- ✅ Pronto para CI/CD (GitHub Actions)
 
 ---
 
 ## 📦 Entidades Criadas
 
-Para cada **EQUIPAMENTO** configurado:
+Por equipamento:
 
-| Tipo | Entidade |
-|----|----|
-| Temperatura | `sensor.<equipamento>_temperatura` |
-| Porta | `binary_sensor.<equipamento>_porta` |
-| Sirene | `switch.<equipamento>_sirene` |
-| Reset | `button.<equipamento>_reset_sirene` |
+- `sensor.<equipamento>_status`
+- `sensor.<equipamento>_temperatura`
+- `sensor.<equipamento>_umidade`
+- `binary_sensor.<equipamento>_energia`
+- `binary_sensor.<equipamento>_porta`
+- `siren.<equipamento>_alarme`
+- `button.<equipamento>_silenciar_alarme`
+
+Globais:
+
+- `sensor.easy_smart_monitor_status`
+- `sensor.easy_smart_monitor_queue`
 
 ---
 
-## 🔧 Instalação
+## 🧭 Instalação
 
-### 1️⃣ Copiar arquivos
+### Manual
 
-Copie a pasta para:
+1. Copie a pasta:
+custom_components/easy_smart_monitor
 
-/config/custom_components/easy_smart_monitor
+makefile
+Copiar código
+para:
+config/custom_components/
 
-shell
+markdown
 Copiar código
 
-### 2️⃣ Estrutura esperada
+2. Reinicie o Home Assistant
 
-easy_smart_monitor/
-├── init.py
-├── manifest.json
-├── const.py
-├── client.py
-├── coordinator.py
-├── sensor.py
-├── binary_sensor.py
-├── switch.py
-├── button.py
-├── config_flow.py
-└── tests/
+3. Vá em:
+Configurações → Dispositivos e Serviços → Adicionar Integração
 
 yaml
 Copiar código
 
-### 3️⃣ Reiniciar o Home Assistant
+4. Procure por **Easy Smart Monitor**
 
 ---
 
 ## ⚙️ Configuração
 
-### 🔐 Primeira tela
-- URL da API
-- Usuário
-- Senha
+Toda a configuração é feita via interface gráfica:
 
-### 🧊 Gerenciamento de Equipamentos
-- Nome do equipamento
-- Local
-- Sensores vinculados:
-  - Temperatura
-  - Porta
-  - Energia (opcional)
-  - Sirene
-  - Botão
-
-Tudo é feito via **Configurações → Dispositivos & Serviços**.
+- Login na API
+- Criação de equipamentos
+- Vinculação de sensores existentes
+- Ajuste de intervalos
+- Ativação/desativação de equipamentos e sensores
 
 ---
 
-## 🚨 Lógica da Sirene
+## 🧪 TEST_MODE (Modo de Teste)
 
-- Porta abre → inicia timer
-- Porta permanece aberta por 120s → sirene dispara
-- Porta fecha → timer cancelado
-- Reset pressionado:
-  - Sirene desliga
-  - Timer reinicia se porta continuar aberta
+O **TEST_MODE** permite usar a integração **sem a API oficial online**.
 
----
+### Quando usar
+- Desenvolvimento local
+- Testes automatizados
+- Validação de UI e entidades
+- Ambientes sem acesso à internet
 
-## 📤 Fila Local & API
+### Como ativar
 
-- Eventos são salvos localmente a cada mudança relevante
-- Persistência via `.storage`
-- Envio em lote a cada 60s
-- Retry automático
-- Token com refresh em caso de expiração
-- Nenhum evento é perdido
+#### Linux / macOS
+```bash
+export EASY_SMART_MONITOR_TEST_MODE=true
+Docker / Home Assistant OS
+Adicionar variável de ambiente:
 
----
+ini
+Copiar código
+EASY_SMART_MONITOR_TEST_MODE=true
+O que muda em TEST_MODE
+✔️ Login é simulado
 
-## 🧪 Testes
+✔️ Nenhuma chamada HTTP real
 
-### Estrutura
-tests/
-├── test_client.py
-├── test_coordinator_queue.py
-└── test_coordinator_siren.py
+✔️ Envio de eventos é ignorado
 
+✔️ Status da integração = test_mode
+
+Para produção, não defina essa variável.
+
+🧪 Testes
+Instalar dependências
 bash
 Copiar código
+pip install pytest pytest-asyncio homeassistant
+Rodar testes
+bash
+Copiar código
+pytest
+Cobertura atual:
 
-### Executar testes
-```bash
-pip install pytest pytest-asyncio
-pytest custom_components/easy_smart_monitor/tests
-🛡️ Requisitos Técnicos
-Home Assistant 2024.12+
+client.py
 
-Python 3.12
+config_flow.py
 
-aiohttp
+coordinator.py
 
-pytest (para testes)
+entidades (sensor, binary_sensor, siren, button)
 
-📈 Próximos Passos (Roadmap)
-Dashboard Lovelace automático
+🤖 CI / GitHub Actions
+O projeto está preparado para CI com GitHub Actions:
 
-Métricas por equipamento
+Executa testes automaticamente
 
-Health check da API
+Usa TEST_MODE
 
-Criptografia da fila local
+Evita regressões
 
-Migração de versão
+🧱 Arquitetura (Resumo)
+Coordinator: cérebro do sistema
 
-📄 Licença
-Uso privado / interno.
-Distribuição conforme necessidade do projeto.
+Entidades: apenas refletem estado
+
+API Client: comunicação externa
+
+Config Flow: UX completa via UI
+
+Fila local: Store persistente
