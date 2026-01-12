@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from homeassistant.components.switch import SwitchEntity
+from homeassistant.components.number import NumberEntity
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -23,7 +23,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
     ]
     storage: EasySmartMonitorStorage = coordinator.storage
 
-    entities: list[SwitchEntity] = []
+    entities: list[NumberEntity] = []
 
     for equipment_id, equipment in storage.get_equipments().items():
         device_info = DeviceInfo(
@@ -36,13 +36,13 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
         entities.extend(
             [
-                EasySmartMonitorEquipmentEnabledSwitch(
+                EasySmartMonitorCollectIntervalNumber(
                     coordinator,
                     storage,
                     equipment_id,
                     device_info,
                 ),
-                EasySmartMonitorEnableSirenSwitch(
+                EasySmartMonitorDoorTimeoutNumber(
                     coordinator,
                     storage,
                     equipment_id,
@@ -55,16 +55,20 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
 
 # ============================================================
-# SWITCH — EQUIPAMENTO ATIVO
+# NUMBER — INTERVALO DE COLETA
 # ============================================================
 
-class EasySmartMonitorEquipmentEnabledSwitch(
-    CoordinatorEntity, SwitchEntity
+class EasySmartMonitorCollectIntervalNumber(
+    CoordinatorEntity, NumberEntity
 ):
-    """Ativa ou desativa o equipamento."""
+    """Intervalo de coleta do equipamento (segundos)."""
 
     _attr_has_entity_name = True
-    _attr_icon = "mdi:power"
+    _attr_icon = "mdi:timer-outline"
+    _attr_native_min_value = 10
+    _attr_native_max_value = 3600
+    _attr_native_step = 10
+    _attr_native_unit_of_measurement = "s"
 
     def __init__(
         self,
@@ -77,39 +81,37 @@ class EasySmartMonitorEquipmentEnabledSwitch(
         self.storage = storage
         self.equipment_id = equipment_id
 
-        self._attr_name = "Equipamento Ativo"
-        self._attr_unique_id = f"{equipment_id}_enabled"
+        self._attr_name = "Intervalo de Coleta"
+        self._attr_unique_id = f"{equipment_id}_collect_interval"
         self._attr_device_info = device_info
 
     @property
-    def is_on(self) -> bool:
+    def native_value(self):
         equipment = self.storage.get_equipment(self.equipment_id)
-        return bool(equipment and equipment.get("enabled", True))
+        return equipment.get("collect_interval", 30)
 
-    async def async_turn_on(self, **kwargs):
-        await self.storage.set_equipment_enabled(
-            self.equipment_id, True
-        )
-        self.coordinator.async_set_updated_data({})
-
-    async def async_turn_off(self, **kwargs):
-        await self.storage.set_equipment_enabled(
-            self.equipment_id, False
+    async def async_set_native_value(self, value: float):
+        await self.storage.set_collect_interval(
+            self.equipment_id, int(value)
         )
         self.coordinator.async_set_updated_data({})
 
 
 # ============================================================
-# SWITCH — SIRENE DA PORTA
+# NUMBER — TEMPO DE PORTA ABERTA
 # ============================================================
 
-class EasySmartMonitorEnableSirenSwitch(
-    CoordinatorEntity, SwitchEntity
+class EasySmartMonitorDoorTimeoutNumber(
+    CoordinatorEntity, NumberEntity
 ):
-    """Ativa ou desativa a sirene do equipamento."""
+    """Tempo máximo de porta aberta (segundos)."""
 
     _attr_has_entity_name = True
-    _attr_icon = "mdi:bell-ring"
+    _attr_icon = "mdi:door-open"
+    _attr_native_min_value = 10
+    _attr_native_max_value = 900
+    _attr_native_step = 10
+    _attr_native_unit_of_measurement = "s"
 
     def __init__(
         self,
@@ -122,28 +124,18 @@ class EasySmartMonitorEnableSirenSwitch(
         self.storage = storage
         self.equipment_id = equipment_id
 
-        self._attr_name = "Sirene Ativa"
-        self._attr_unique_id = f"{equipment_id}_enable_siren"
+        self._attr_name = "Tempo Porta Aberta"
+        self._attr_unique_id = f"{equipment_id}_door_timeout"
         self._attr_device_info = device_info
 
     @property
-    def is_on(self) -> bool:
+    def native_value(self):
         equipment = self.storage.get_equipment(self.equipment_id)
-        return bool(
-            equipment
-            and equipment.get("door", {}).get("enable_siren", True)
-        )
+        return equipment.get("door", {}).get("open_timeout", 120)
 
-    async def async_turn_on(self, **kwargs):
+    async def async_set_native_value(self, value: float):
         await self.storage.set_door_config(
             self.equipment_id,
-            enable_siren=True,
-        )
-        self.coordinator.async_set_updated_data({})
-
-    async def async_turn_off(self, **kwargs):
-        await self.storage.set_door_config(
-            self.equipment_id,
-            enable_siren=False,
+            open_timeout=int(value),
         )
         self.coordinator.async_set_updated_data({})

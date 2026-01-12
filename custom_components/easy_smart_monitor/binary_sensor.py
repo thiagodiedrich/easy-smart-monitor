@@ -4,28 +4,11 @@ from homeassistant.components.binary_sensor import (
     BinarySensorEntity,
     BinarySensorDeviceClass,
 )
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import (
-    DOMAIN,
-    MANUFACTURER,
-    MODEL_VIRTUAL,
-)
+from .const import DOMAIN, MANUFACTURER, MODEL_VIRTUAL
 from .coordinator import EasySmartMonitorCoordinator
-
-
-# ============================================================
-# HELPERS
-# ============================================================
-
-def _get_equipments(entry) -> list[dict]:
-    """Retorna equipamentos de options ou data."""
-    return (
-        entry.options.get("equipments")
-        or entry.data.get("equipments")
-        or []
-    )
 
 
 # ============================================================
@@ -33,71 +16,30 @@ def _get_equipments(entry) -> list[dict]:
 # ============================================================
 
 async def async_setup_entry(hass, entry, async_add_entities):
-    """Configura binary sensors do Easy Smart Monitor."""
     coordinator: EasySmartMonitorCoordinator = hass.data[DOMAIN][
         entry.entry_id
     ]
 
     entities: list[BinarySensorEntity] = []
 
-    for equipment in _get_equipments(entry):
+    for equipment_id, equipment in (
+        coordinator.storage.get_equipments().items()
+    ):
         device_info = DeviceInfo(
-            identifiers={(DOMAIN, equipment["uuid"])},
+            identifiers={(DOMAIN, equipment_id)},
             name=equipment["name"],
             manufacturer=MANUFACTURER,
             model=MODEL_VIRTUAL,
             suggested_area=equipment.get("location"),
         )
 
-        entities.extend(
-            [
-                EasySmartMonitorEnergyBinarySensor(
-                    coordinator, equipment, device_info
-                ),
-                EasySmartMonitorDoorBinarySensor(
-                    coordinator, equipment, device_info
-                ),
-            ]
+        entities.append(
+            EasySmartMonitorDoorBinarySensor(
+                coordinator, equipment_id, device_info
+            )
         )
 
     async_add_entities(entities)
-
-
-# ============================================================
-# SENSOR BINÁRIO — ENERGIA
-# ============================================================
-
-class EasySmartMonitorEnergyBinarySensor(
-    CoordinatorEntity, BinarySensorEntity
-):
-    """Sensor binário de energia do equipamento."""
-
-    _attr_has_entity_name = True
-    _attr_device_class = BinarySensorDeviceClass.POWER
-
-    def __init__(
-        self,
-        coordinator: EasySmartMonitorCoordinator,
-        equipment: dict,
-        device_info: DeviceInfo,
-    ):
-        super().__init__(coordinator)
-        self.equipment = equipment
-        self._attr_name = "Energia"
-        self._attr_unique_id = f"{equipment['uuid']}_energy"
-        self._attr_device_info = device_info
-
-    @property
-    def is_on(self):
-        return self.coordinator.binary_states[
-            self.equipment["id"]
-        ].get("energy_on")
-
-    @property
-    def extra_state_attributes(self):
-        return self.coordinator.binary_attributes[
-            self.equipment["id"]
-        ].get("energy", {})
 
 
 # ============================================================
@@ -107,7 +49,7 @@ class EasySmartMonitorEnergyBinarySensor(
 class EasySmartMonitorDoorBinarySensor(
     CoordinatorEntity, BinarySensorEntity
 ):
-    """Sensor binário de porta do equipamento."""
+    """Estado da porta do equipamento."""
 
     _attr_has_entity_name = True
     _attr_device_class = BinarySensorDeviceClass.DOOR
@@ -115,23 +57,25 @@ class EasySmartMonitorDoorBinarySensor(
     def __init__(
         self,
         coordinator: EasySmartMonitorCoordinator,
-        equipment: dict,
+        equipment_id: str,
         device_info: DeviceInfo,
     ):
         super().__init__(coordinator)
-        self.equipment = equipment
+        self.equipment_id = equipment_id
         self._attr_name = "Porta"
-        self._attr_unique_id = f"{equipment['uuid']}_door"
+        self._attr_unique_id = f"{equipment_id}_door"
         self._attr_device_info = device_info
 
     @property
-    def is_on(self):
-        return self.coordinator.binary_states[
-            self.equipment["id"]
-        ].get("door_open")
+    def is_on(self) -> bool | None:
+        source = self.coordinator.storage.get_sensor_source(
+            self.equipment_id, "door"
+        )
+        if not source:
+            return None
 
-    @property
-    def extra_state_attributes(self):
-        return self.coordinator.binary_attributes[
-            self.equipment["id"]
-        ].get("door", {})
+        state = self.coordinator.hass.states.get(source)
+        if not state:
+            return None
+
+        return state.state == "on"

@@ -25,7 +25,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 # ============================================================
-# CONFIG FLOW (CRIAÇÃO DA INTEGRAÇÃO)
+# CONFIG FLOW — CRIAÇÃO DA INTEGRAÇÃO
 # ============================================================
 
 class EasySmartMonitorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -43,9 +43,9 @@ class EasySmartMonitorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             username = user_input[CONF_USERNAME]
             password = user_input[CONF_PASSWORD]
 
-            # ------------------------------
-            # TEST MODE (SEM API)
-            # ------------------------------
+            # --------------------------------------------------
+            # TEST MODE (SEM API REAL)
+            # --------------------------------------------------
             if TEST_MODE:
                 _LOGGER.warning(
                     "Easy Smart Monitor iniciado em TEST_MODE "
@@ -65,9 +65,9 @@ class EasySmartMonitorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     },
                 )
 
-            # ------------------------------
-            # PRODUÇÃO (VALIDA API)
-            # ------------------------------
+            # --------------------------------------------------
+            # PRODUÇÃO — VALIDA API
+            # --------------------------------------------------
             try:
                 session = aiohttp_client.async_get_clientsession(self.hass)
                 client = EasySmartMonitorApiClient(
@@ -118,7 +118,7 @@ class EasySmartMonitorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 # ============================================================
-# OPTIONS FLOW (GESTÃO CONTÍNUA)
+# OPTIONS FLOW — CONFIGURAÇÃO CONTÍNUA
 # ============================================================
 
 class EasySmartMonitorOptionsFlow(config_entries.OptionsFlow):
@@ -126,25 +126,32 @@ class EasySmartMonitorOptionsFlow(config_entries.OptionsFlow):
 
     def __init__(self, entry: config_entries.ConfigEntry) -> None:
         self.entry = entry
+
+        # Estrutura garantida
         self.options = dict(entry.options)
+        self.options.setdefault("equipments", [])
+        self.options.setdefault("send_interval", 60)
+        self.options.setdefault("paused", False)
+
         self._selected_equipment_id: int | None = None
 
-    # --------------------------------------------------------
+    # =========================================================
     # MENU PRINCIPAL
-    # --------------------------------------------------------
+    # =========================================================
 
     async def async_step_init(self, user_input=None):
         return self.async_show_menu(
             step_id="init",
             menu_options=[
                 "integration_settings",
-                "select_equipment",
+                "equipment_menu",
+                "sensor_menu",
             ],
         )
 
-    # --------------------------------------------------------
-    # CONFIGURAÇÕES DA INTEGRAÇÃO
-    # --------------------------------------------------------
+    # =========================================================
+    # MENU 1 — CONFIGURAÇÃO DA INTEGRAÇÃO
+    # =========================================================
 
     async def async_step_integration_settings(self, user_input=None):
         if user_input is not None:
@@ -158,30 +165,40 @@ class EasySmartMonitorOptionsFlow(config_entries.OptionsFlow):
                 {
                     vol.Required(
                         "send_interval",
-                        default=self.options.get("send_interval", 60),
+                        default=self.options["send_interval"],
                     ): vol.All(int, vol.Range(min=10)),
                     vol.Required(
                         "paused",
-                        default=self.options.get("paused", False),
+                        default=self.options["paused"],
                     ): bool,
                 }
             ),
         )
 
-    # --------------------------------------------------------
-    # SELEÇÃO DE EQUIPAMENTO
-    # --------------------------------------------------------
+    # =========================================================
+    # MENU 2 — CONFIGURAÇÃO DE EQUIPAMENTOS
+    # =========================================================
+
+    async def async_step_equipment_menu(self, user_input=None):
+        return self.async_show_menu(
+            step_id="equipment_menu",
+            menu_options=[
+                "add_equipment",
+                "select_equipment",
+            ],
+        )
 
     async def async_step_select_equipment(self, user_input=None):
-        equipments = self.options.get("equipments", [])
+        if not self.options["equipments"]:
+            return await self.async_step_add_equipment()
 
         if user_input is not None:
             self._selected_equipment_id = user_input["equipment_id"]
-            return await self.async_step_equipment_menu()
+            return await self.async_step_edit_equipment()
 
         equipment_map = {
             f"{e['name']} ({e['location']})": e["id"]
-            for e in equipments
+            for e in self.options["equipments"]
         }
 
         return self.async_show_form(
@@ -193,30 +210,14 @@ class EasySmartMonitorOptionsFlow(config_entries.OptionsFlow):
             ),
         )
 
-    # --------------------------------------------------------
-    # MENU DO EQUIPAMENTO
-    # --------------------------------------------------------
-
-    async def async_step_equipment_menu(self, user_input=None):
-        return self.async_show_menu(
-            step_id="equipment_menu",
-            menu_options=[
-                "add_equipment",
-                "edit_equipment",
-                "manage_sensors",
-            ],
-        )
-
-    # --------------------------------------------------------
-    # ADICIONAR EQUIPAMENTO
-    # --------------------------------------------------------
-
     async def async_step_add_equipment(self, user_input=None):
         if user_input is not None:
-            equipments = self.options.setdefault("equipments", [])
-            equipment_id = len(equipments) + 1
+            equipment_id = (
+                max([e["id"] for e in self.options["equipments"]], default=0)
+                + 1
+            )
 
-            equipments.append(
+            self.options["equipments"].append(
                 {
                     "id": equipment_id,
                     "uuid": uuid.uuid4().hex,
@@ -224,13 +225,10 @@ class EasySmartMonitorOptionsFlow(config_entries.OptionsFlow):
                     "location": user_input["location"],
                     "collect_interval": user_input["collect_interval"],
                     "enabled": True,
-
-                    # v1.1.0 defaults (porta)
                     "door": {
                         "enable_siren": True,
                         "open_timeout": DEFAULT_DOOR_OPEN_SECONDS,
                     },
-
                     "sensors": [],
                 }
             )
@@ -243,16 +241,12 @@ class EasySmartMonitorOptionsFlow(config_entries.OptionsFlow):
                 {
                     vol.Required("name"): str,
                     vol.Required("location"): str,
-                    vol.Required("collect_interval", default=30): vol.All(
-                        int, vol.Range(min=10)
-                    ),
+                    vol.Required(
+                        "collect_interval", default=30
+                    ): vol.All(int, vol.Range(min=10)),
                 }
             ),
         )
-
-    # --------------------------------------------------------
-    # EDITAR EQUIPAMENTO (v1.1.0)
-    # --------------------------------------------------------
 
     async def async_step_edit_equipment(self, user_input=None):
         equipment = next(
@@ -261,11 +255,6 @@ class EasySmartMonitorOptionsFlow(config_entries.OptionsFlow):
         )
 
         door_cfg = equipment.get("door", {})
-        enable_siren = door_cfg.get("enable_siren", True)
-        open_timeout = door_cfg.get(
-            "open_timeout",
-            DEFAULT_DOOR_OPEN_SECONDS,
-        )
 
         if user_input is not None:
             equipment.update(
@@ -287,58 +276,59 @@ class EasySmartMonitorOptionsFlow(config_entries.OptionsFlow):
             data_schema=vol.Schema(
                 {
                     vol.Required("name", default=equipment["name"]): str,
-                    vol.Required("location", default=equipment["location"]): str,
+                    vol.Required(
+                        "location", default=equipment["location"]
+                    ): str,
                     vol.Required(
                         "collect_interval",
                         default=equipment["collect_interval"],
                     ): vol.All(int, vol.Range(min=10)),
                     vol.Required(
-                        "enabled",
-                        default=equipment["enabled"],
+                        "enabled", default=equipment["enabled"]
                     ): bool,
-
-                    # 🔔 NOVO — Porta
                     vol.Required(
                         "enable_siren",
-                        default=enable_siren,
+                        default=door_cfg.get("enable_siren", True),
                     ): bool,
                     vol.Required(
                         "open_timeout",
-                        default=open_timeout,
+                        default=door_cfg.get(
+                            "open_timeout",
+                            DEFAULT_DOOR_OPEN_SECONDS,
+                        ),
                     ): vol.All(int, vol.Range(min=10)),
                 }
             ),
         )
 
-    # --------------------------------------------------------
-    # MENU DE SENSORES
-    # --------------------------------------------------------
+    # =========================================================
+    # MENU 3 — CONFIGURAÇÃO DE SENSORES
+    # =========================================================
 
-    async def async_step_manage_sensors(self, user_input=None):
+    async def async_step_sensor_menu(self, user_input=None):
         return self.async_show_menu(
-            step_id="manage_sensors",
+            step_id="sensor_menu",
             menu_options=[
                 "add_sensor",
-                "edit_sensor",
-                "remove_sensor",
             ],
         )
 
-    # --------------------------------------------------------
-    # ADICIONAR SENSOR
-    # --------------------------------------------------------
-
     async def async_step_add_sensor(self, user_input=None):
+        if self._selected_equipment_id is None:
+            return await self.async_step_select_equipment()
+
         equipment = next(
             e for e in self.options["equipments"]
             if e["id"] == self._selected_equipment_id
         )
 
         if user_input is not None:
-            sensors = equipment.setdefault("sensors", [])
-            sensor_id = len(sensors) + 1
+            sensor_id = (
+                max([s["id"] for s in equipment["sensors"]], default=0)
+                + 1
+            )
 
-            sensors.append(
+            equipment["sensors"].append(
                 {
                     "id": sensor_id,
                     "uuid": uuid.uuid4().hex,
@@ -381,91 +371,3 @@ class EasySmartMonitorOptionsFlow(config_entries.OptionsFlow):
                 }
             ),
         )
-
-    # --------------------------------------------------------
-    # EDITAR SENSOR
-    # --------------------------------------------------------
-
-    async def async_step_edit_sensor(self, user_input=None):
-        equipment = next(
-            e for e in self.options["equipments"]
-            if e["id"] == self._selected_equipment_id
-        )
-
-        if user_input is None:
-            sensor_map = {
-                f"{s['id']} - {s['entity_id']}": s["id"]
-                for s in equipment.get("sensors", [])
-            }
-
-            return self.async_show_form(
-                step_id="edit_sensor",
-                data_schema=vol.Schema(
-                    {
-                        vol.Required("sensor_id"): vol.In(sensor_map),
-                    }
-                ),
-            )
-
-        sensor = next(
-            s for s in equipment["sensors"]
-            if s["id"] == user_input["sensor_id"]
-        )
-
-        return await self.async_step_edit_sensor_detail(sensor)
-
-    async def async_step_edit_sensor_detail(self, sensor, user_input=None):
-        if user_input is not None:
-            sensor["type"] = user_input["sensor_type"]
-            sensor["enabled"] = user_input["enabled"]
-            return self.async_create_entry(title="", data=self.options)
-
-        return self.async_show_form(
-            step_id="edit_sensor_detail",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(
-                        "sensor_type",
-                        default=sensor["type"],
-                    ): vol.In(
-                        ["temperature", "humidity", "energy", "door"]
-                    ),
-                    vol.Required(
-                        "enabled",
-                        default=sensor["enabled"],
-                    ): bool,
-                }
-            ),
-        )
-
-    # --------------------------------------------------------
-    # REMOVER SENSOR
-    # --------------------------------------------------------
-
-    async def async_step_remove_sensor(self, user_input=None):
-        equipment = next(
-            e for e in self.options["equipments"]
-            if e["id"] == self._selected_equipment_id
-        )
-
-        if user_input is None:
-            sensor_map = {
-                f"{s['id']} - {s['entity_id']}": s["id"]
-                for s in equipment.get("sensors", [])
-            }
-
-            return self.async_show_form(
-                step_id="remove_sensor",
-                data_schema=vol.Schema(
-                    {
-                        vol.Required("sensor_id"): vol.In(sensor_map),
-                    }
-                ),
-            )
-
-        equipment["sensors"] = [
-            s for s in equipment["sensors"]
-            if s["id"] != user_input["sensor_id"]
-        ]
-
-        return self.async_create_entry(title="", data=self.options)

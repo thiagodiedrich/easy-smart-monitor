@@ -114,4 +114,7 @@ PLATFORMS = [
     "binary_sensor",
     "siren",
     "button",
+    "switch",
+    "number",
+    "select",
 ]

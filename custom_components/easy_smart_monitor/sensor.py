@@ -1,34 +1,14 @@
 from __future__ import annotations
 
-from homeassistant.components.sensor import SensorEntity
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from homeassistant.helpers.entity import DeviceInfo
-
-from .const import (
-    DOMAIN,
-    MANUFACTURER,
-    MODEL_VIRTUAL,
+from homeassistant.components.sensor import (
+    SensorEntity,
+    SensorDeviceClass,
 )
+from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
+
+from .const import DOMAIN, MANUFACTURER, MODEL_VIRTUAL
 from .coordinator import EasySmartMonitorCoordinator
-
-
-# ============================================================
-# HELPERS
-# ============================================================
-
-def _get_equipments(entry) -> list[dict]:
-    """
-    Retorna lista de equipamentos da ConfigEntry.
-
-    Prioridade:
-    1. entry.options (quando OptionsFlow existir)
-    2. entry.data (configuração inicial)
-    """
-    return (
-        entry.options.get("equipments")
-        or entry.data.get("equipments")
-        or []
-    )
 
 
 # ============================================================
@@ -36,38 +16,27 @@ def _get_equipments(entry) -> list[dict]:
 # ============================================================
 
 async def async_setup_entry(hass, entry, async_add_entities):
-    """Configura sensores do Easy Smart Monitor."""
     coordinator: EasySmartMonitorCoordinator = hass.data[DOMAIN][
         entry.entry_id
     ]
 
     entities: list[SensorEntity] = []
 
-    # --------------------------------------------------------
-    # SENSOR GLOBAL DA INTEGRAÇÃO
-    # --------------------------------------------------------
-    integration_device = DeviceInfo(
-        identifiers={(DOMAIN, "integration")},
-        name="Easy Smart Monitor",
-        manufacturer=MANUFACTURER,
-        model=MODEL_VIRTUAL,
-    )
-
+    # ----------------------------
+    # SENSOR GLOBAL — STATUS
+    # ----------------------------
     entities.append(
-        EasySmartMonitorIntegrationStatusSensor(
-            coordinator=coordinator,
-            name="Status",
-            unique_id=f"{entry.entry_id}_integration_status",
-            device_info=integration_device,
-        )
+        EasySmartMonitorIntegrationStatusSensor(coordinator)
     )
 
-    # --------------------------------------------------------
+    # ----------------------------
     # SENSORES POR EQUIPAMENTO
-    # --------------------------------------------------------
-    for equipment in _get_equipments(entry):
+    # ----------------------------
+    for equipment_id, equipment in (
+        coordinator.storage.get_equipments().items()
+    ):
         device_info = DeviceInfo(
-            identifiers={(DOMAIN, equipment["uuid"])},
+            identifiers={(DOMAIN, equipment_id)},
             name=equipment["name"],
             manufacturer=MANUFACTURER,
             model=MODEL_VIRTUAL,
@@ -76,14 +45,14 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
         entities.extend(
             [
-                EasySmartMonitorEquipmentStatusSensor(
-                    coordinator, equipment, device_info
-                ),
                 EasySmartMonitorTemperatureSensor(
-                    coordinator, equipment, device_info
+                    coordinator, equipment_id, device_info
                 ),
                 EasySmartMonitorHumiditySensor(
-                    coordinator, equipment, device_info
+                    coordinator, equipment_id, device_info
+                ),
+                EasySmartMonitorEnergySensor(
+                    coordinator, equipment_id, device_info
                 ),
             ]
         )
@@ -98,26 +67,21 @@ async def async_setup_entry(hass, entry, async_add_entities):
 class EasySmartMonitorIntegrationStatusSensor(
     CoordinatorEntity, SensorEntity
 ):
-    """Sensor de status global da integração."""
+    """Status geral da integração."""
 
     _attr_has_entity_name = True
+    _attr_name = "Status"
     _attr_icon = "mdi:lan-connect"
 
-    def __init__(
-        self,
-        coordinator: EasySmartMonitorCoordinator,
-        name: str,
-        unique_id: str,
-        device_info: DeviceInfo,
-    ):
+    def __init__(self, coordinator: EasySmartMonitorCoordinator):
         super().__init__(coordinator)
-        self._attr_name = name
-        self._attr_unique_id = unique_id
-        self._attr_device_info = device_info
+        self._attr_unique_id = f"{DOMAIN}_integration_status"
 
     @property
     def native_value(self):
-        return self.coordinator.integration_status
+        if self.coordinator.last_successful_sync:
+            return "online"
+        return "idle"
 
     @property
     def extra_state_attributes(self):
@@ -128,101 +92,128 @@ class EasySmartMonitorIntegrationStatusSensor(
 
 
 # ============================================================
-# SENSOR POR EQUIPAMENTO — STATUS
-# ============================================================
-
-class EasySmartMonitorEquipmentStatusSensor(
-    CoordinatorEntity, SensorEntity
-):
-    """Sensor de status do equipamento."""
-
-    _attr_has_entity_name = True
-    _attr_icon = "mdi:alert-circle-outline"
-
-    def __init__(
-        self,
-        coordinator: EasySmartMonitorCoordinator,
-        equipment: dict,
-        device_info: DeviceInfo,
-    ):
-        super().__init__(coordinator)
-        self.equipment = equipment
-        self._attr_name = "Status"
-        self._attr_unique_id = f"{equipment['uuid']}_status"
-        self._attr_device_info = device_info
-
-    @property
-    def native_value(self):
-        return self.coordinator.equipment_status.get(
-            self.equipment["id"]
-        )
-
-    @property
-    def extra_state_attributes(self):
-        return self.coordinator.equipment_status_details.get(
-            self.equipment["id"], {}
-        )
-
-
-# ============================================================
-# SENSOR POR EQUIPAMENTO — TEMPERATURA
+# SENSOR — TEMPERATURA
 # ============================================================
 
 class EasySmartMonitorTemperatureSensor(
     CoordinatorEntity, SensorEntity
 ):
-    """Sensor de temperatura do equipamento."""
+    """Temperatura do equipamento."""
 
     _attr_has_entity_name = True
-    _attr_device_class = "temperature"
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
     _attr_native_unit_of_measurement = "°C"
 
     def __init__(
         self,
         coordinator: EasySmartMonitorCoordinator,
-        equipment: dict,
+        equipment_id: str,
         device_info: DeviceInfo,
     ):
         super().__init__(coordinator)
-        self.equipment = equipment
+        self.equipment_id = equipment_id
         self._attr_name = "Temperatura"
-        self._attr_unique_id = f"{equipment['uuid']}_temperature"
+        self._attr_unique_id = f"{equipment_id}_temperature"
         self._attr_device_info = device_info
 
     @property
     def native_value(self):
-        return self.coordinator.numeric_states[
-            self.equipment["id"]
-        ].get("temperature")
+        source = self.coordinator.storage.get_sensor_source(
+            self.equipment_id, "temperature"
+        )
+        if not source:
+            return None
+
+        state = self.coordinator.hass.states.get(source)
+        if not state or state.state in ("unknown", "unavailable"):
+            return None
+
+        try:
+            return float(state.state)
+        except ValueError:
+            return None
 
 
 # ============================================================
-# SENSOR POR EQUIPAMENTO — UMIDADE
+# SENSOR — UMIDADE
 # ============================================================
 
 class EasySmartMonitorHumiditySensor(
     CoordinatorEntity, SensorEntity
 ):
-    """Sensor de umidade do equipamento."""
+    """Umidade do equipamento."""
 
     _attr_has_entity_name = True
-    _attr_device_class = "humidity"
+    _attr_device_class = SensorDeviceClass.HUMIDITY
     _attr_native_unit_of_measurement = "%"
 
     def __init__(
         self,
         coordinator: EasySmartMonitorCoordinator,
-        equipment: dict,
+        equipment_id: str,
         device_info: DeviceInfo,
     ):
         super().__init__(coordinator)
-        self.equipment = equipment
+        self.equipment_id = equipment_id
         self._attr_name = "Umidade"
-        self._attr_unique_id = f"{equipment['uuid']}_humidity"
+        self._attr_unique_id = f"{equipment_id}_humidity"
         self._attr_device_info = device_info
 
     @property
     def native_value(self):
-        return self.coordinator.numeric_states[
-            self.equipment["id"]
-        ].get("humidity")
+        source = self.coordinator.storage.get_sensor_source(
+            self.equipment_id, "humidity"
+        )
+        if not source:
+            return None
+
+        state = self.coordinator.hass.states.get(source)
+        if not state or state.state in ("unknown", "unavailable"):
+            return None
+
+        try:
+            return float(state.state)
+        except ValueError:
+            return None
+
+
+# ============================================================
+# SENSOR — ENERGIA
+# ============================================================
+
+class EasySmartMonitorEnergySensor(
+    CoordinatorEntity, SensorEntity
+):
+    """Energia do equipamento."""
+
+    _attr_has_entity_name = True
+    _attr_device_class = SensorDeviceClass.ENERGY
+
+    def __init__(
+        self,
+        coordinator: EasySmartMonitorCoordinator,
+        equipment_id: str,
+        device_info: DeviceInfo,
+    ):
+        super().__init__(coordinator)
+        self.equipment_id = equipment_id
+        self._attr_name = "Energia"
+        self._attr_unique_id = f"{equipment_id}_energy"
+        self._attr_device_info = device_info
+
+    @property
+    def native_value(self):
+        source = self.coordinator.storage.get_sensor_source(
+            self.equipment_id, "energy"
+        )
+        if not source:
+            return None
+
+        state = self.coordinator.hass.states.get(source)
+        if not state or state.state in ("unknown", "unavailable"):
+            return None
+
+        try:
+            return float(state.state)
+        except ValueError:
+            return None
