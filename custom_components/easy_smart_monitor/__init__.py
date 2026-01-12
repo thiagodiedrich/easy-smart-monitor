@@ -2,33 +2,33 @@ from __future__ import annotations
 
 import logging
 
+import aiohttp
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import aiohttp_client
 
 from .const import DOMAIN, PLATFORMS
-from .client import EasySmartMonitorApiClient
 from .coordinator import EasySmartMonitorCoordinator
+from .client import EasySmartMonitorApiClient
 
 _LOGGER = logging.getLogger(__name__)
 
 
-async def async_setup(hass: HomeAssistant, config: dict) -> bool:
-    """
-    Setup inicial da integração.
-    Não utiliza YAML, apenas retorna True para compatibilidade.
-    """
+async def async_setup(hass: HomeAssistant, config: dict):
+    """Setup inicial da integração."""
+    hass.data.setdefault(DOMAIN, {})
     return True
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """
-    Configura a integração a partir de uma ConfigEntry.
-    Cria client, coordinator e registra as plataformas.
-    """
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+) -> bool:
+    """Configura Easy Smart Monitor a partir de uma ConfigEntry."""
     hass.data.setdefault(DOMAIN, {})
 
-    session = aiohttp_client.async_get_clientsession(hass)
+    # 🔹 Sessão HTTP compartilhada
+    session = aiohttp.ClientSession()
 
     api_client = EasySmartMonitorApiClient(
         base_url=entry.data["api_host"],
@@ -43,42 +43,33 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         entry=entry,
     )
 
+    # ⚠️ CRÍTICO: armazenar o coordinator diretamente
+    hass.data[DOMAIN][entry.entry_id] = coordinator
+
     await coordinator.async_initialize()
 
-    hass.data[DOMAIN][entry.entry_id] = {
-        "client": api_client,
-        "coordinator": coordinator,
-    }
-
     await hass.config_entries.async_forward_entry_setups(
-        entry,
-        PLATFORMS,
+        entry, PLATFORMS
     )
-
-    _LOGGER.info("Easy Smart Monitor inicializado com sucesso")
 
     return True
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """
-    Remove a integração e descarrega todas as plataformas.
-    Garante cancelamento de tasks e persistência correta.
-    """
+async def async_unload_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+) -> bool:
+    """Remove a integração."""
     unload_ok = await hass.config_entries.async_unload_platforms(
-        entry,
-        PLATFORMS,
+        entry, PLATFORMS
     )
 
     if unload_ok:
-        data = hass.data[DOMAIN].pop(entry.entry_id)
-        coordinator: EasySmartMonitorCoordinator = data["coordinator"]
+        coordinator = hass.data[DOMAIN].pop(entry.entry_id)
+
+        # Fecha a sessão HTTP
+        await coordinator.api_client._session.close()
 
         await coordinator.async_shutdown()
-
-        if not hass.data[DOMAIN]:
-            hass.data.pop(DOMAIN)
-
-        _LOGGER.info("Easy Smart Monitor descarregado com sucesso")
 
     return unload_ok
