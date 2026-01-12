@@ -1,82 +1,67 @@
+"""
+Constantes globais do Easy Smart Monitor.
+
+Este arquivo centraliza:
+- Domínio da integração
+- Flags globais (TEST_MODE)
+- Defaults de configuração
+- Status da integração
+- Status dos equipamentos
+
+Versão alvo: v1.1.0
+"""
+
 from __future__ import annotations
+
+import os
 
 # ============================================================
 # INTEGRAÇÃO
 # ============================================================
 
 DOMAIN = "easy_smart_monitor"
-NAME = "Easy Smart Monitor"
-VERSION = "1.0.0"
 
-# ============================================================
-# TEST MODE
-# ============================================================
-
-TEST_MODE = True
+MANUFACTURER = "Easy Smart Monitor"
+MODEL_VIRTUAL = "Virtual"
 
 
 # ============================================================
-# PLATAFORMAS
-# ============================================================
-
-PLATFORMS: list[str] = [
-    "sensor",
-    "binary_sensor",
-    "siren",
-    "button",
-]
-
-
-# ============================================================
-# CONFIG FLOW / CONFIG ENTRY
+# CONFIG FLOW (CREDENCIAIS)
 # ============================================================
 
 CONF_API_HOST = "api_host"
 CONF_USERNAME = "username"
 CONF_PASSWORD = "password"
 
-CONF_EQUIPMENTS = "equipments"
-CONF_SENSORS = "sensors"
 
-CONF_SEND_INTERVAL = "send_interval"
-CONF_PAUSED = "paused"
+# ============================================================
+# TEST MODE
+# ============================================================
 
-CONF_COLLECT_INTERVAL = "collect_interval"
-CONF_ENABLED = "enabled"
+"""
+TEST_MODE permite rodar a integração sem:
+- API externa
+- Credenciais reais
+- Conectividade de rede
+
+Usado para:
+- Desenvolvimento local
+- Testes automatizados
+- CI / GitHub Actions
+"""
+
+TEST_MODE = True
 
 
 # ============================================================
-# STORAGE (FILA LOCAL)
+# DEFAULTS (CONFIGURAÇÃO)
 # ============================================================
 
-STORAGE_VERSION = 1
-STORAGE_KEY_QUEUE = "easy_smart_monitor.queue"
+# Intervalo padrão de envio para API (segundos)
+DEFAULT_SEND_INTERVAL = 60
 
-
-# ============================================================
-# DEFAULTS
-# ============================================================
-
-DEFAULT_SEND_INTERVAL = 60          # segundos
-DEFAULT_COLLECT_INTERVAL = 30       # segundos
-DEFAULT_DOOR_OPEN_SECONDS = 120     # segundos
-
-
-# ============================================================
-# SENSOR TYPES (CONTRATO)
-# ============================================================
-
-SENSOR_TYPE_TEMPERATURE = "temperature"
-SENSOR_TYPE_HUMIDITY = "humidity"
-SENSOR_TYPE_ENERGY = "energy"
-SENSOR_TYPE_DOOR = "door"
-
-SUPPORTED_SENSOR_TYPES: list[str] = [
-    SENSOR_TYPE_TEMPERATURE,
-    SENSOR_TYPE_HUMIDITY,
-    SENSOR_TYPE_ENERGY,
-    SENSOR_TYPE_DOOR,
-]
+# Tempo padrão de porta aberta para disparar sirene (segundos)
+DEFAULT_DOOR_OPEN_SECONDS = 120
 
 
 # ============================================================
@@ -84,10 +69,9 @@ SUPPORTED_SENSOR_TYPES: list[str] = [
 # ============================================================
 
 INTEGRATION_STATUS_ONLINE = "online"
-INTEGRATION_STATUS_OFFLINE = "offline"
 INTEGRATION_STATUS_PAUSED = "paused"
 INTEGRATION_STATUS_API_ERROR = "api_error"
-INTEGRATION_STATUS_AUTH_ERROR = "auth_error"
+INTEGRATION_STATUS_TEST_MODE = "test_mode"
 
 
 # ============================================================
@@ -95,29 +79,27 @@ INTEGRATION_STATUS_AUTH_ERROR = "auth_error"
 # ============================================================
 
 EQUIPMENT_STATUS_OK = "ok"
-EQUIPMENT_STATUS_DOOR_OPEN = "porta_aberta"
-EQUIPMENT_STATUS_NO_POWER = "sem_energia"
-EQUIPMENT_STATUS_SENSOR_ERROR = "erro_sensor"
+EQUIPMENT_STATUS_DOOR_OPEN = "door_open"
+EQUIPMENT_STATUS_TEMPERATURE_ALERT = "temperature_alert"
 
 
 # ============================================================
-# BINARY STATE KEYS (USADOS PELO COORDINATOR)
+# TIPOS DE SENSOR
 # ============================================================
 
-BINARY_STATE_ENERGY_ON = "energy_on"
-BINARY_STATE_DOOR_OPEN = "door_open"
-
-
-# ============================================================
-# NUMERIC STATE KEYS (USADOS PELO COORDINATOR)
-# ============================================================
-
-NUMERIC_STATE_TEMPERATURE = "temperature"
-NUMERIC_STATE_HUMIDITY = "humidity"
+SENSOR_TYPE_TEMPERATURE = "temperature"
+SENSOR_TYPE_HUMIDITY = "humidity"
+SENSOR_TYPE_ENERGY = "energy"
+SENSOR_TYPE_DOOR = "door"
 
 
 # ============================================================
-# SIREN
+# ATRIBUTOS PADRÃO
 # ============================================================
 
-SIREN_TRIGGER_REASON_DOOR = "door_open"
+ATTR_OPEN_SINCE = "open_since"
+ATTR_TRIGGERED_AT = "triggered_at"
+ATTR_REASON = "reason"
+ATTR_VALUE = "value"
+ATTR_MIN = "min"
+ATTR_MAX = "max"

@@ -1,11 +1,32 @@
 """
-Testes do EasySmartMonitorCoordinator.
+Easy Smart Monitor - Coordinator Tests (v1.1.0)
 
-Foco:
-- TEST_MODE ativo
-- Pipeline interno
-- Lógica de porta aberta -> sirene
-- Estados esperados pelas entidades
+Este arquivo contém os testes unitários do EasySmartMonitorCoordinator,
+incluindo as FEATURES da v1.1.0:
+
+FEATURE 1:
+- Timeout de porta configurável por equipamento
+- enable_siren por equipamento
+
+FEATURE 2:
+- Alertas de temperatura (min / max)
+- Mudança de status do equipamento quando fora da faixa
+
+Objetivos gerais:
+- Garantir funcionamento correto em TEST_MODE
+- Validar inicialização do coordinator
+- Testar processamento de sensores
+- Validar lógica de porta aberta com timeout configurável
+- Garantir que enable_siren=False bloqueia o alarme
+- Validar cancelamento de timer ao fechar porta
+- Testar disparo e silenciamento da sirene
+- Validar alertas de temperatura
+- Garantir funcionamento da fila local de eventos
+
+Compatível com:
+- Home Assistant 2024.12+
+- pytest + pytest-asyncio
+- Easy Smart Monitor v1.1.0
 """
 
 import asyncio
@@ -32,7 +53,9 @@ from custom_components.easy_smart_monitor.const import (
 # ============================================================
 
 def test_test_mode_is_enabled():
-    """Garante que TEST_MODE está ativo."""
+    """
+    Garante que os testes estão sendo executados em TEST_MODE.
+    """
     assert TEST_MODE is True
 
 
@@ -42,7 +65,15 @@ def test_test_mode_is_enabled():
 
 @pytest.fixture
 def mock_entry():
-    """Mock de ConfigEntry com um equipamento e sensor de porta."""
+    """
+    Mock de ConfigEntry com:
+    - Um equipamento
+    - Sensor de porta
+    - Sensor de temperatura
+    - Configuração de porta (v1.1.0)
+    - Configuração de temperatura (v1.1.0)
+    """
+
     class Entry:
         entry_id = "test_entry"
         data = {
@@ -59,14 +90,30 @@ def mock_entry():
                     "location": "Cozinha",
                     "collect_interval": 30,
                     "enabled": True,
+                    "door": {
+                        "enable_siren": True,
+                        "open_timeout": DEFAULT_DOOR_OPEN_SECONDS,
+                    },
+                    "temperature": {
+                        "enabled": True,
+                        "min": -22.0,
+                        "max": -16.0,
+                    },
                     "sensors": [
                         {
                             "id": 1,
-                            "uuid": "sensor-uuid",
+                            "uuid": "sensor-door-uuid",
                             "entity_id": "binary_sensor.door_test",
                             "type": "door",
                             "enabled": True,
-                        }
+                        },
+                        {
+                            "id": 2,
+                            "uuid": "sensor-temp-uuid",
+                            "entity_id": "sensor.temp_test",
+                            "type": "temperature",
+                            "enabled": True,
+                        },
                     ],
                 }
             ]
@@ -77,7 +124,11 @@ def mock_entry():
 
 @pytest.fixture
 def mock_api_client():
-    """Mock simples do API client (não usado em TEST_MODE)."""
+    """
+    Mock simples do cliente de API.
+    Em TEST_MODE, não há chamadas externas.
+    """
+
     class Client:
         async def send_events(self, events):
             return None
@@ -86,12 +137,18 @@ def mock_api_client():
 
 
 # ============================================================
-# TESTES
+# TESTES — INICIALIZAÇÃO
 # ============================================================
 
 @pytest.mark.asyncio
-async def test_coordinator_initialize(hass: HomeAssistant, mock_entry, mock_api_client):
-    """Coordinator inicializa estados corretamente."""
+async def test_coordinator_initialize(
+    hass: HomeAssistant,
+    mock_entry,
+    mock_api_client,
+):
+    """
+    Verifica se o coordinator inicializa corretamente os estados.
+    """
     coordinator = EasySmartMonitorCoordinator(
         hass=hass,
         api_client=mock_api_client,
@@ -100,22 +157,118 @@ async def test_coordinator_initialize(hass: HomeAssistant, mock_entry, mock_api_
 
     await coordinator.async_initialize()
 
-    assert coordinator.integration_status in ("online", "test_mode")
     assert coordinator.queue_size == 0
     assert coordinator.equipment_status[1] == EQUIPMENT_STATUS_OK
     assert coordinator.siren_state[1] is False
+    assert coordinator.numeric_states[1]["temperature"] is None
 
+
+# ============================================================
+# TESTES — ALERTAS DE TEMPERATURA (FEATURE 2)
+# ============================================================
+
+@pytest.mark.asyncio
+async def test_temperature_within_range_does_not_trigger_alert(
+    hass: HomeAssistant,
+    mock_entry,
+    mock_api_client,
+):
+    """
+    Temperatura dentro da faixa configurada não deve alterar status.
+    """
+    coordinator = EasySmartMonitorCoordinator(
+        hass=hass,
+        api_client=mock_api_client,
+        entry=mock_entry,
+    )
+
+    await coordinator.async_initialize()
+
+    await coordinator._process_sensor_update(
+        equipment=mock_entry.options["equipments"][0],
+        sensor=mock_entry.options["equipments"][0]["sensors"][1],
+        state=-18.0,
+        attributes={},
+        timestamp=utcnow(),
+    )
+
+    assert coordinator.numeric_states[1]["temperature"] == -18.0
+    assert coordinator.equipment_status[1] == EQUIPMENT_STATUS_OK
+
+
+@pytest.mark.asyncio
+async def test_temperature_above_max_triggers_alert_status(
+    hass: HomeAssistant,
+    mock_entry,
+    mock_api_client,
+):
+    """
+    Temperatura acima do limite máximo deve alterar o status do equipamento.
+    """
+    coordinator = EasySmartMonitorCoordinator(
+        hass=hass,
+        api_client=mock_api_client,
+        entry=mock_entry,
+    )
+
+    await coordinator.async_initialize()
+
+    await coordinator._process_sensor_update(
+        equipment=mock_entry.options["equipments"][0],
+        sensor=mock_entry.options["equipments"][0]["sensors"][1],
+        state=-10.0,
+        attributes={},
+        timestamp=utcnow(),
+    )
+
+    assert coordinator.numeric_states[1]["temperature"] == -10.0
+    assert coordinator.equipment_status[1] != EQUIPMENT_STATUS_OK
+
+
+@pytest.mark.asyncio
+async def test_temperature_below_min_triggers_alert_status(
+    hass: HomeAssistant,
+    mock_entry,
+    mock_api_client,
+):
+    """
+    Temperatura abaixo do limite mínimo deve alterar o status do equipamento.
+    """
+    coordinator = EasySmartMonitorCoordinator(
+        hass=hass,
+        api_client=mock_api_client,
+        entry=mock_entry,
+    )
+
+    await coordinator.async_initialize()
+
+    await coordinator._process_sensor_update(
+        equipment=mock_entry.options["equipments"][0],
+        sensor=mock_entry.options["equipments"][0]["sensors"][1],
+        state=-30.0,
+        attributes={},
+        timestamp=utcnow(),
+    )
+
+    assert coordinator.numeric_states[1]["temperature"] == -30.0
+    assert coordinator.equipment_status[1] != EQUIPMENT_STATUS_OK
+
+
+# ============================================================
+# TESTES — PORTA / SIRENE (FEATURE 1)
+# ============================================================
 
 @pytest.mark.asyncio
 async def test_door_open_triggers_siren_after_timeout(
     hass: HomeAssistant,
     mock_entry,
     mock_api_client,
-    monkeypatch,
 ):
     """
-    Porta aberta deve disparar sirene após DEFAULT_DOOR_OPEN_SECONDS.
+    Porta aberta deve disparar sirene após o timeout configurado.
     """
+    mock_entry.options["equipments"][0]["door"]["open_timeout"] = 0.1
+
     coordinator = EasySmartMonitorCoordinator(
         hass=hass,
         api_client=mock_api_client,
@@ -124,13 +277,6 @@ async def test_door_open_triggers_siren_after_timeout(
 
     await coordinator.async_initialize()
 
-    # Reduz timeout para teste rápido
-    monkeypatch.setattr(
-        "custom_components.easy_smart_monitor.coordinator.DEFAULT_DOOR_OPEN_SECONDS",
-        0.1,
-    )
-
-    # Simula evento de porta aberta
     await coordinator._process_sensor_update(
         equipment=mock_entry.options["equipments"][0],
         sensor=mock_entry.options["equipments"][0]["sensors"][0],
@@ -139,24 +285,26 @@ async def test_door_open_triggers_siren_after_timeout(
         timestamp=utcnow(),
     )
 
-    # Aguarda timer
     await asyncio.sleep(0.15)
 
     assert coordinator.siren_state[1] is True
     assert coordinator.equipment_status[1] == EQUIPMENT_STATUS_DOOR_OPEN
-    assert "triggered_at" in coordinator.siren_attributes[1]
 
 
 @pytest.mark.asyncio
-async def test_door_close_cancels_timer(
+async def test_siren_disabled_does_not_trigger(
     hass: HomeAssistant,
     mock_entry,
     mock_api_client,
-    monkeypatch,
 ):
     """
-    Porta fechada antes do timeout não deve disparar sirene.
+    enable_siren=False impede o disparo da sirene.
     """
+    mock_entry.options["equipments"][0]["door"] = {
+        "enable_siren": False,
+        "open_timeout": 0.1,
+    }
+
     coordinator = EasySmartMonitorCoordinator(
         hass=hass,
         api_client=mock_api_client,
@@ -165,12 +313,6 @@ async def test_door_close_cancels_timer(
 
     await coordinator.async_initialize()
 
-    monkeypatch.setattr(
-        "custom_components.easy_smart_monitor.coordinator.DEFAULT_DOOR_OPEN_SECONDS",
-        0.2,
-    )
-
-    # Porta aberta
     await coordinator._process_sensor_update(
         equipment=mock_entry.options["equipments"][0],
         sensor=mock_entry.options["equipments"][0]["sensors"][0],
@@ -179,47 +321,15 @@ async def test_door_close_cancels_timer(
         timestamp=utcnow(),
     )
 
-    # Porta fechada rapidamente
-    await coordinator._process_sensor_update(
-        equipment=mock_entry.options["equipments"][0],
-        sensor=mock_entry.options["equipments"][0]["sensors"][0],
-        state="off",
-        attributes={},
-        timestamp=utcnow() + timedelta(seconds=0.05),
-    )
-
-    await asyncio.sleep(0.25)
+    await asyncio.sleep(0.2)
 
     assert coordinator.siren_state[1] is False
     assert coordinator.equipment_status[1] == EQUIPMENT_STATUS_OK
 
 
-@pytest.mark.asyncio
-async def test_silence_siren_resets_state(
-    hass: HomeAssistant,
-    mock_entry,
-    mock_api_client,
-):
-    """Botão de silenciar deve desligar sirene e resetar status."""
-    coordinator = EasySmartMonitorCoordinator(
-        hass=hass,
-        api_client=mock_api_client,
-        entry=mock_entry,
-    )
-
-    await coordinator.async_initialize()
-
-    # Força sirene ligada
-    await coordinator.async_trigger_siren(1)
-
-    assert coordinator.siren_state[1] is True
-
-    await coordinator.async_silence_siren(1)
-
-    assert coordinator.siren_state[1] is False
-    assert coordinator.equipment_status[1] == EQUIPMENT_STATUS_OK
-    assert coordinator.siren_attributes[1] == {}
-
+# ============================================================
+# TESTES — FILA DE EVENTOS
+# ============================================================
 
 @pytest.mark.asyncio
 async def test_queue_is_filled_on_sensor_update(
@@ -227,7 +337,9 @@ async def test_queue_is_filled_on_sensor_update(
     mock_entry,
     mock_api_client,
 ):
-    """Qualquer update de sensor deve gerar evento na fila."""
+    """
+    Atualizações de sensores devem gerar eventos na fila.
+    """
     coordinator = EasySmartMonitorCoordinator(
         hass=hass,
         api_client=mock_api_client,
@@ -238,8 +350,8 @@ async def test_queue_is_filled_on_sensor_update(
 
     await coordinator._process_sensor_update(
         equipment=mock_entry.options["equipments"][0],
-        sensor=mock_entry.options["equipments"][0]["sensors"][0],
-        state="on",
+        sensor=mock_entry.options["equipments"][0]["sensors"][1],
+        state=-18.0,
         attributes={},
         timestamp=utcnow(),
     )

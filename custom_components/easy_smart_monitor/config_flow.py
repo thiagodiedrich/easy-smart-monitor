@@ -16,6 +16,7 @@ from .const import (
     CONF_API_HOST,
     CONF_USERNAME,
     CONF_PASSWORD,
+    DEFAULT_DOOR_OPEN_SECONDS,
     TEST_MODE,
 )
 from .client import EasySmartMonitorApiClient
@@ -35,7 +36,6 @@ class EasySmartMonitorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ):
-        """Tela inicial – login."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
@@ -224,6 +224,13 @@ class EasySmartMonitorOptionsFlow(config_entries.OptionsFlow):
                     "location": user_input["location"],
                     "collect_interval": user_input["collect_interval"],
                     "enabled": True,
+
+                    # v1.1.0 defaults (porta)
+                    "door": {
+                        "enable_siren": True,
+                        "open_timeout": DEFAULT_DOOR_OPEN_SECONDS,
+                    },
+
                     "sensors": [],
                 }
             )
@@ -244,13 +251,20 @@ class EasySmartMonitorOptionsFlow(config_entries.OptionsFlow):
         )
 
     # --------------------------------------------------------
-    # EDITAR EQUIPAMENTO
+    # EDITAR EQUIPAMENTO (v1.1.0)
     # --------------------------------------------------------
 
     async def async_step_edit_equipment(self, user_input=None):
         equipment = next(
             e for e in self.options["equipments"]
             if e["id"] == self._selected_equipment_id
+        )
+
+        door_cfg = equipment.get("door", {})
+        enable_siren = door_cfg.get("enable_siren", True)
+        open_timeout = door_cfg.get(
+            "open_timeout",
+            DEFAULT_DOOR_OPEN_SECONDS,
         )
 
         if user_input is not None:
@@ -260,6 +274,10 @@ class EasySmartMonitorOptionsFlow(config_entries.OptionsFlow):
                     "location": user_input["location"],
                     "collect_interval": user_input["collect_interval"],
                     "enabled": user_input["enabled"],
+                    "door": {
+                        "enable_siren": user_input["enable_siren"],
+                        "open_timeout": user_input["open_timeout"],
+                    },
                 }
             )
             return self.async_create_entry(title="", data=self.options)
@@ -278,6 +296,16 @@ class EasySmartMonitorOptionsFlow(config_entries.OptionsFlow):
                         "enabled",
                         default=equipment["enabled"],
                     ): bool,
+
+                    # 🔔 NOVO — Porta
+                    vol.Required(
+                        "enable_siren",
+                        default=enable_siren,
+                    ): bool,
+                    vol.Required(
+                        "open_timeout",
+                        default=open_timeout,
+                    ): vol.All(int, vol.Range(min=10)),
                 }
             ),
         )

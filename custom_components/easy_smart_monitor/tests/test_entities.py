@@ -1,11 +1,16 @@
 """
-Testes das entidades do Easy Smart Monitor.
+Easy Smart Monitor - Entity Tests
 
-Cobre:
-- sensor.py
-- binary_sensor.py
-- siren.py
-- button.py
+Testes unitários das entidades do Easy Smart Monitor.
+
+Cobertura:
+- Sensores globais
+- Sensores por equipamento
+- Binary sensors
+- Sirene
+- Botão de silenciar
+- Estados novos da v1.1.0 (temperature_alert)
+- TEST_MODE
 """
 
 import pytest
@@ -32,6 +37,7 @@ from custom_components.easy_smart_monitor.const import (
     DOMAIN,
     EQUIPMENT_STATUS_OK,
     EQUIPMENT_STATUS_DOOR_OPEN,
+    EQUIPMENT_STATUS_TEMPERATURE_ALERT,
     TEST_MODE,
 )
 
@@ -41,7 +47,7 @@ from custom_components.easy_smart_monitor.const import (
 # ============================================================
 
 def test_test_mode_is_enabled():
-    """Garante que TEST_MODE está ativo."""
+    """Garante que TEST_MODE está ativo durante os testes."""
     assert TEST_MODE is True
 
 
@@ -51,6 +57,7 @@ def test_test_mode_is_enabled():
 
 @pytest.fixture
 def device_info():
+    """DeviceInfo padrão de equipamento."""
     return DeviceInfo(
         identifiers={(DOMAIN, "equip-uuid")},
         name="Freezer Teste",
@@ -62,20 +69,20 @@ def device_info():
 @pytest.fixture
 def coordinator_mock():
     """
-    Mock mínimo do Coordinator contendo todos os atributos
+    Mock do coordinator contendo todos os atributos
     esperados pelas entidades.
     """
     class Coordinator:
         integration_status = "test_mode"
         last_successful_sync = None
-        queue_size = 3
+        queue_size = 2
 
         equipment_status = {1: EQUIPMENT_STATUS_OK}
         equipment_status_details = {1: {}}
 
         numeric_states = {
             1: {
-                "temperature": -18.5,
+                "temperature": -18.0,
                 "humidity": 65.0,
             }
         }
@@ -107,12 +114,14 @@ def coordinator_mock():
         async def async_silence_siren(self, equipment_id: int):
             self.siren_state[equipment_id] = False
             self.equipment_status[equipment_id] = EQUIPMENT_STATUS_OK
+            self.equipment_status_details[equipment_id] = {}
 
     return Coordinator()
 
 
 @pytest.fixture
 def equipment():
+    """Mock de equipamento."""
     return {
         "id": 1,
         "uuid": "equip-uuid",
@@ -133,10 +142,10 @@ def test_integration_status_sensor(coordinator_mock, device_info):
     )
 
     assert sensor.native_value == "test_mode"
-    assert sensor.extra_state_attributes["queue_size"] == 3
+    assert sensor.extra_state_attributes["queue_size"] == 2
 
 
-def test_equipment_status_sensor(coordinator_mock, device_info, equipment):
+def test_equipment_status_sensor_ok(coordinator_mock, device_info, equipment):
     sensor = EasySmartMonitorEquipmentStatusSensor(
         coordinator=coordinator_mock,
         equipment=equipment,
@@ -144,6 +153,28 @@ def test_equipment_status_sensor(coordinator_mock, device_info, equipment):
     )
 
     assert sensor.native_value == EQUIPMENT_STATUS_OK
+    assert sensor.extra_state_attributes == {}
+
+
+def test_equipment_status_sensor_temperature_alert(
+    coordinator_mock, device_info, equipment
+):
+    coordinator_mock.equipment_status[1] = EQUIPMENT_STATUS_TEMPERATURE_ALERT
+    coordinator_mock.equipment_status_details[1] = {
+        "reason": "above_max",
+        "value": -10.0,
+        "max": -16.0,
+    }
+
+    sensor = EasySmartMonitorEquipmentStatusSensor(
+        coordinator=coordinator_mock,
+        equipment=equipment,
+        device_info=device_info,
+    )
+
+    assert sensor.native_value == EQUIPMENT_STATUS_TEMPERATURE_ALERT
+    assert sensor.extra_state_attributes["reason"] == "above_max"
+    assert sensor.extra_state_attributes["value"] == -10.0
 
 
 def test_temperature_sensor(coordinator_mock, device_info, equipment):
@@ -153,7 +184,7 @@ def test_temperature_sensor(coordinator_mock, device_info, equipment):
         device_info=device_info,
     )
 
-    assert sensor.native_value == -18.5
+    assert sensor.native_value == -18.0
 
 
 def test_humidity_sensor(coordinator_mock, device_info, equipment):
@@ -219,7 +250,6 @@ async def test_siren_turn_off(coordinator_mock, device_info, equipment):
         device_info=device_info,
     )
 
-    # Força sirene ligada
     coordinator_mock.siren_state[1] = True
 
     await siren.async_turn_off()
@@ -240,7 +270,6 @@ async def test_silence_alarm_button(coordinator_mock, device_info, equipment):
         device_info=device_info,
     )
 
-    # Força sirene ligada
     coordinator_mock.siren_state[1] = True
     coordinator_mock.equipment_status[1] = EQUIPMENT_STATUS_DOOR_OPEN
 
