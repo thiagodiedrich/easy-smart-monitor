@@ -125,7 +125,7 @@ class EasySmartMonitorCoordinator(DataUpdateCoordinator):
             self.siren_state[equipment_id] = False
             self.siren_attributes[equipment_id] = {}
 
-        await self.async_set_updated_data({})
+        self.async_set_updated_data({})
 
         _LOGGER.info("Easy Smart Monitor Coordinator inicializado")
 
@@ -272,7 +272,7 @@ class EasySmartMonitorCoordinator(DataUpdateCoordinator):
             }
         )
 
-        await self.async_set_updated_data({})
+        self.async_set_updated_data({})
 
     # =========================================================
     # LÓGICA DE PORTA / SIRENE (FEATURE 1)
@@ -321,7 +321,7 @@ class EasySmartMonitorCoordinator(DataUpdateCoordinator):
             "triggered_at": datetime.utcnow().isoformat()
         }
 
-        await self.async_set_updated_data({})
+        self.async_set_updated_data({})
 
     async def async_silence_siren(self, equipment_id: int) -> None:
         """Silencia a sirene do equipamento."""
@@ -331,7 +331,7 @@ class EasySmartMonitorCoordinator(DataUpdateCoordinator):
         self.equipment_status[equipment_id] = EQUIPMENT_STATUS_OK
         self.siren_attributes[equipment_id] = {}
 
-        await self.async_set_updated_data({})
+        self.async_set_updated_data({})
 
     # =========================================================
     # ENVIO DE EVENTOS PARA API
@@ -349,7 +349,7 @@ class EasySmartMonitorCoordinator(DataUpdateCoordinator):
             )
             self._queue.clear()
             self.last_successful_sync = datetime.utcnow()
-            await self.async_set_updated_data({})
+            self.async_set_updated_data({})
             return
 
         try:
@@ -361,4 +361,4 @@ class EasySmartMonitorCoordinator(DataUpdateCoordinator):
             _LOGGER.error("Erro ao enviar eventos: %s", err)
             self.integration_status = INTEGRATION_STATUS_API_ERROR
 
-        await self.async_set_updated_data({})
+        self.async_set_updated_data({})

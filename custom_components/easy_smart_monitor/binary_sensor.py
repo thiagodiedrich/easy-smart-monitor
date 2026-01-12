@@ -7,6 +7,51 @@ from homeassistant.components.binary_sensor import (
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.helpers.entity import DeviceInfo
 
+from .const import (
+    DOMAIN,
+    MANUFACTURER,
+    MODEL_VIRTUAL,
+)
+from .coordinator import EasySmartMonitorCoordinator
+
+
+# ============================================================
+# SETUP DA PLATAFORMA
+# ============================================================
+
+async def async_setup_entry(hass, entry, async_add_entities):
+    """Configura binary sensors do Easy Smart Monitor."""
+    coordinator: EasySmartMonitorCoordinator = hass.data[DOMAIN][
+        entry.entry_id
+    ]
+
+    entities: list[BinarySensorEntity] = []
+
+    # ----------------------------
+    # SENSORES BINÁRIOS POR EQUIPAMENTO
+    # ----------------------------
+    for equipment in entry.options.get("equipments", []):
+        device_info = DeviceInfo(
+            identifiers={(DOMAIN, equipment["uuid"])},
+            name=equipment["name"],
+            manufacturer=MANUFACTURER,
+            model=MODEL_VIRTUAL,
+            suggested_area=equipment.get("location"),
+        )
+
+        entities.extend(
+            [
+                EasySmartMonitorEnergyBinarySensor(
+                    coordinator, equipment, device_info
+                ),
+                EasySmartMonitorDoorBinarySensor(
+                    coordinator, equipment, device_info
+                ),
+            ]
+        )
+
+    async_add_entities(entities)
+
 
 # ============================================================
 # SENSOR BINÁRIO — ENERGIA
@@ -15,26 +60,31 @@ from homeassistant.helpers.entity import DeviceInfo
 class EasySmartMonitorEnergyBinarySensor(
     CoordinatorEntity, BinarySensorEntity
 ):
-    """Sensor binário de energia."""
+    """Sensor binário de energia do equipamento."""
 
     _attr_has_entity_name = True
     _attr_device_class = BinarySensorDeviceClass.POWER
 
-    def __init__(self, coordinator, equipment: dict, device_info: DeviceInfo):
+    def __init__(
+        self,
+        coordinator: EasySmartMonitorCoordinator,
+        equipment: dict,
+        device_info: DeviceInfo,
+    ):
         super().__init__(coordinator)
         self.equipment = equipment
-        self._attr_unique_id = f"{equipment['uuid']}_energy"
         self._attr_name = "Energia"
+        self._attr_unique_id = f"{equipment['uuid']}_energy"
         self._attr_device_info = device_info
 
     @property
-    def is_on(self):
+    def is_on(self) -> bool | None:
         return self.coordinator.binary_states[
             self.equipment["id"]
         ].get("energy_on")
 
     @property
-    def extra_state_attributes(self):
+    def extra_state_attributes(self) -> dict:
         return self.coordinator.binary_attributes[
             self.equipment["id"]
         ].get("energy", {})
@@ -47,26 +97,31 @@ class EasySmartMonitorEnergyBinarySensor(
 class EasySmartMonitorDoorBinarySensor(
     CoordinatorEntity, BinarySensorEntity
 ):
-    """Sensor binário de porta."""
+    """Sensor binário de porta do equipamento."""
 
     _attr_has_entity_name = True
     _attr_device_class = BinarySensorDeviceClass.DOOR
 
-    def __init__(self, coordinator, equipment: dict, device_info: DeviceInfo):
+    def __init__(
+        self,
+        coordinator: EasySmartMonitorCoordinator,
+        equipment: dict,
+        device_info: DeviceInfo,
+    ):
         super().__init__(coordinator)
         self.equipment = equipment
-        self._attr_unique_id = f"{equipment['uuid']}_door"
         self._attr_name = "Porta"
+        self._attr_unique_id = f"{equipment['uuid']}_door"
         self._attr_device_info = device_info
 
     @property
-    def is_on(self):
+    def is_on(self) -> bool | None:
         return self.coordinator.binary_states[
             self.equipment["id"]
         ].get("door_open")
 
     @property
-    def extra_state_attributes(self):
+    def extra_state_attributes(self) -> dict:
         return self.coordinator.binary_attributes[
             self.equipment["id"]
         ].get("door", {})

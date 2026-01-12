@@ -103,3 +103,15 @@ ATTR_REASON = "reason"
 ATTR_VALUE = "value"
 ATTR_MIN = "min"
 ATTR_MAX = "max"
+
+
+# ============================================================
+# PLATFORMS (Home Assistant)
+# ============================================================
+
+PLATFORMS = [
+    "sensor",
+    "binary_sensor",
+    "siren",
+    "button",
+]
