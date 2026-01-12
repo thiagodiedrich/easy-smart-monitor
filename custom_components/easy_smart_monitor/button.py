@@ -13,6 +13,19 @@ from .coordinator import EasySmartMonitorCoordinator
 
 
 # ============================================================
+# HELPERS
+# ============================================================
+
+def _get_equipments(entry) -> list[dict]:
+    """Retorna equipamentos de options ou data."""
+    return (
+        entry.options.get("equipments")
+        or entry.data.get("equipments")
+        or []
+    )
+
+
+# ============================================================
 # SETUP DA PLATAFORMA
 # ============================================================
 
@@ -24,10 +37,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
     entities: list[ButtonEntity] = []
 
-    # ----------------------------
-    # BOTÕES POR EQUIPAMENTO
-    # ----------------------------
-    for equipment in entry.options.get("equipments", []):
+    for equipment in _get_equipments(entry):
         device_info = DeviceInfo(
             identifiers={(DOMAIN, equipment["uuid"])},
             name=equipment["name"],
@@ -38,9 +48,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
         entities.append(
             EasySmartMonitorSilenceAlarmButton(
-                coordinator=coordinator,
-                equipment=equipment,
-                device_info=device_info,
+                coordinator, equipment, device_info
             )
         )
 
@@ -73,8 +81,7 @@ class EasySmartMonitorSilenceAlarmButton(
         )
         self._attr_device_info = device_info
 
-    async def async_press(self) -> None:
-        """Executa o silenciamento da sirene."""
+    async def async_press(self):
         await self.coordinator.async_silence_siren(
             self.equipment["id"]
         )

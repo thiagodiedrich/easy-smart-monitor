@@ -16,6 +16,19 @@ from .coordinator import EasySmartMonitorCoordinator
 
 
 # ============================================================
+# HELPERS
+# ============================================================
+
+def _get_equipments(entry) -> list[dict]:
+    """Retorna equipamentos de options ou data."""
+    return (
+        entry.options.get("equipments")
+        or entry.data.get("equipments")
+        or []
+    )
+
+
+# ============================================================
 # SETUP DA PLATAFORMA
 # ============================================================
 
@@ -27,10 +40,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
     entities: list[BinarySensorEntity] = []
 
-    # ----------------------------
-    # SENSORES BINÁRIOS POR EQUIPAMENTO
-    # ----------------------------
-    for equipment in entry.options.get("equipments", []):
+    for equipment in _get_equipments(entry):
         device_info = DeviceInfo(
             identifiers={(DOMAIN, equipment["uuid"])},
             name=equipment["name"],
@@ -78,13 +88,13 @@ class EasySmartMonitorEnergyBinarySensor(
         self._attr_device_info = device_info
 
     @property
-    def is_on(self) -> bool | None:
+    def is_on(self):
         return self.coordinator.binary_states[
             self.equipment["id"]
         ].get("energy_on")
 
     @property
-    def extra_state_attributes(self) -> dict:
+    def extra_state_attributes(self):
         return self.coordinator.binary_attributes[
             self.equipment["id"]
         ].get("energy", {})
@@ -115,13 +125,13 @@ class EasySmartMonitorDoorBinarySensor(
         self._attr_device_info = device_info
 
     @property
-    def is_on(self) -> bool | None:
+    def is_on(self):
         return self.coordinator.binary_states[
             self.equipment["id"]
         ].get("door_open")
 
     @property
-    def extra_state_attributes(self) -> dict:
+    def extra_state_attributes(self):
         return self.coordinator.binary_attributes[
             self.equipment["id"]
         ].get("door", {})

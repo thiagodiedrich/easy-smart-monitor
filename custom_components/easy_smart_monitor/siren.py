@@ -13,6 +13,19 @@ from .coordinator import EasySmartMonitorCoordinator
 
 
 # ============================================================
+# HELPERS
+# ============================================================
+
+def _get_equipments(entry) -> list[dict]:
+    """Retorna equipamentos de options ou data."""
+    return (
+        entry.options.get("equipments")
+        or entry.data.get("equipments")
+        or []
+    )
+
+
+# ============================================================
 # SETUP DA PLATAFORMA
 # ============================================================
 
@@ -24,10 +37,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
     entities: list[SirenEntity] = []
 
-    # ----------------------------
-    # SIRENES POR EQUIPAMENTO
-    # ----------------------------
-    for equipment in entry.options.get("equipments", []):
+    for equipment in _get_equipments(entry):
         device_info = DeviceInfo(
             identifiers={(DOMAIN, equipment["uuid"])},
             name=equipment["name"],
@@ -38,9 +48,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
         entities.append(
             EasySmartMonitorSiren(
-                coordinator=coordinator,
-                equipment=equipment,
-                device_info=device_info,
+                coordinator, equipment, device_info
             )
         )
 
@@ -72,27 +80,23 @@ class EasySmartMonitorSiren(
         self._attr_device_info = device_info
 
     @property
-    def is_on(self) -> bool:
-        """Retorna se a sirene está ligada."""
+    def is_on(self):
         return self.coordinator.siren_state.get(
             self.equipment["id"], False
         )
 
     async def async_turn_on(self, **kwargs):
-        """Liga a sirene manualmente."""
         await self.coordinator.async_trigger_siren(
             self.equipment["id"]
         )
 
     async def async_turn_off(self, **kwargs):
-        """Desliga (silencia) a sirene."""
         await self.coordinator.async_silence_siren(
             self.equipment["id"]
         )
 
     @property
-    def extra_state_attributes(self) -> dict:
-        """Atributos extras da sirene."""
+    def extra_state_attributes(self):
         return self.coordinator.siren_attributes.get(
             self.equipment["id"], {}
         )

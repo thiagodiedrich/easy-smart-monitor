@@ -13,6 +13,25 @@ from .coordinator import EasySmartMonitorCoordinator
 
 
 # ============================================================
+# HELPERS
+# ============================================================
+
+def _get_equipments(entry) -> list[dict]:
+    """
+    Retorna lista de equipamentos da ConfigEntry.
+
+    Prioridade:
+    1. entry.options (quando OptionsFlow existir)
+    2. entry.data (configuração inicial)
+    """
+    return (
+        entry.options.get("equipments")
+        or entry.data.get("equipments")
+        or []
+    )
+
+
+# ============================================================
 # SETUP DA PLATAFORMA
 # ============================================================
 
@@ -24,11 +43,11 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
     entities: list[SensorEntity] = []
 
-    # ----------------------------
+    # --------------------------------------------------------
     # SENSOR GLOBAL DA INTEGRAÇÃO
-    # ----------------------------
+    # --------------------------------------------------------
     integration_device = DeviceInfo(
-        identifiers={(DOMAIN, entry.entry_id)},
+        identifiers={(DOMAIN, "integration")},
         name="Easy Smart Monitor",
         manufacturer=MANUFACTURER,
         model=MODEL_VIRTUAL,
@@ -43,10 +62,10 @@ async def async_setup_entry(hass, entry, async_add_entities):
         )
     )
 
-    # ----------------------------
+    # --------------------------------------------------------
     # SENSORES POR EQUIPAMENTO
-    # ----------------------------
-    for equipment in entry.options.get("equipments", []):
+    # --------------------------------------------------------
+    for equipment in _get_equipments(entry):
         device_info = DeviceInfo(
             identifiers={(DOMAIN, equipment["uuid"])},
             name=equipment["name"],

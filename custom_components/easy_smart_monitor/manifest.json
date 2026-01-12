@@ -1,7 +1,7 @@
 {
   "domain": "easy_smart_monitor",
   "name": "Easy Smart Monitor",
-  "version": "1.1.0",
+  "version": "1.1.3",
   "documentation": "https://github.com/thiagodiedrich/easy-smart-monitor",
   "issue_tracker": "https://github.com/thiagodiedrich/easy-smart-monitor/issues",
   "requirements": [],
